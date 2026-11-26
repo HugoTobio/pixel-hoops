@@ -21,7 +21,7 @@ const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySele
 const video = $<HTMLVideoElement>('#video');
 const overlay = $<HTMLCanvasElement>('#overlay');
 const canvas = $<HTMLCanvasElement>('#view');
-const scrub = $<HTMLInputElement>('#scrub');
+const timeline = $('#timeline');
 const playBtn = $<HTMLButtonElement>('#play');
 const fmt = (x: number, d = 2) => x.toFixed(d).replace('.', ',');
 
@@ -112,6 +112,8 @@ const state = {
   cancel: false,
   dirty: false,
   editing: false,
+  /** fps del vídeo medidos al abrirlo (antes de analizar); con captura mandan los de la captura. */
+  videoFps: 30,
 };
 const sample = MocapClip.emptySample();
 let lastOverlayFrame = -2;
@@ -177,14 +179,31 @@ async function open(name: string) {
     await new Promise<void>((ok) => video.addEventListener('loadedmetadata', () => ok(), { once: true }));
   } else video.removeAttribute('src');
   state.range = [0, video.duration || 0];
+  // fps del vídeo en segundo plano (para numerar fotogramas antes de analizar).
+  if (it.video) {
+    const src = it.video;
+    void analysisVideo(src)
+      .then((v) => measureFps(v, 0))
+      .then((fps) => {
+        if (video.src.endsWith(src)) state.videoFps = fps;
+        renderTicks();
+      })
+      .catch(() => {});
+  }
   $<HTMLButtonElement>('#dup').disabled = !it.video;
   if (it.capture) {
     const cap = await api<Capture>(`capture/${name}`);
+    const draft = restoreDraft(cap);
     loadCapture(cap);
-    status(`${name}: clip de ${state.baked!.world.length} fotogramas a ${fmt(cap.fps, 1)} fps · ${statsText()}`, 'ok');
+    if (draft) {
+      state.dirty = true;
+      const at = draft.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+      status(`Recuperados los cambios sin guardar de las ${at} (${cap.ballKeys?.length ?? 0} keyframes, salto ×${fmt(cap.exaggerate.jump)}). Pulsa GUARDAR EN EL JUEGO para conservarlos.`, 'ok');
+    } else status(`${name}: clip de ${state.baked!.world.length} fotogramas a ${fmt(cap.fps, 1)} fps · ${statsText()}`, 'ok');
   } else status(it.video ? `${name}: sin analizar. Marca el tramo (opcional) y pulsa ANALIZAR.` : `${name}: falta el vídeo.`);
   seek(state.range[0]);
   updateRangeUi();
+  renderTicks();
 }
 
 function statsText() {
@@ -204,6 +223,7 @@ function loadCapture(cap: Capture) {
   setSliders(cap.exaggerate.jump, cap.exaggerate.pose);
   $<HTMLButtonElement>('#save').disabled = false;
   $<HTMLButtonElement>('#export').disabled = false;
+  renderTicks();
 }
 
 /** Vuelve a hornear tras cambiar keyframes o pies fijos (rápido: ~decenas de ms). */
@@ -229,6 +249,50 @@ function queueRebake() {
 function markDirty(msg = 'Cambios sin guardar: pulsa GUARDAR EN EL JUEGO.') {
   state.dirty = true;
   status(msg);
+  queueDraft();
+}
+
+// --- Borrador automático -------------------------------------------------------------------
+// Lo editable de una captura se guarda al momento en el navegador: si la página se recarga
+// (o se cierra) sin GUARDAR, al volver a abrir la captura se recupera.
+type Draft = Pick<Capture, 'ballKeys' | 'exaggerate' | 'feetLock' | 'trim'> & { at: number; analysis: string };
+const draftKey = (name: string) => `pixel-hoops-studio-draft:${name}`;
+/** Huella del análisis: el borrador solo vale para el mismo análisis. */
+const analysisId = (c: Capture) => `${c.range[0].toFixed(4)}|${c.range[1].toFixed(4)}|${c.fps.toFixed(3)}|${c.frames.length}`;
+let draftTimer = 0;
+function queueDraft() {
+  clearTimeout(draftTimer);
+  draftTimer = window.setTimeout(saveDraft, 250);
+}
+function saveDraft() {
+  const c = state.capture;
+  if (!c || !state.dirty) return;
+  const d: Draft = { at: Date.now(), analysis: analysisId(c), ballKeys: c.ballKeys, exaggerate: c.exaggerate, feetLock: c.feetLock, trim: c.trim };
+  try {
+    localStorage.setItem(draftKey(state.name), JSON.stringify(d));
+  } catch {
+    /* sin espacio: no pasa nada, solo no hay borrador */
+  }
+}
+function clearDraft(name = state.name) {
+  clearTimeout(draftTimer);
+  localStorage.removeItem(draftKey(name));
+}
+/** Si hay un borrador de esta captura (del mismo análisis), lo aplica y devuelve cuándo se hizo. */
+function restoreDraft(c: Capture): Date | null {
+  const raw = localStorage.getItem(draftKey(c.name));
+  if (!raw) return null;
+  try {
+    const d = JSON.parse(raw) as Draft;
+    if (d.analysis !== analysisId(c)) return null;
+    c.ballKeys = d.ballKeys ?? [];
+    c.exaggerate = d.exaggerate ?? c.exaggerate;
+    c.feetLock = d.feetLock ?? true;
+    c.trim = d.trim;
+    return new Date(d.at);
+  } catch {
+    return null;
+  }
 }
 
 function pickClip() {
@@ -296,7 +360,12 @@ $('#dup-cancel').onclick = () => $('#dup-form').classList.remove('show');
 $<HTMLFormElement>('#dup-form').onsubmit = async (e) => {
   e.preventDefault();
   const to = $<HTMLInputElement>('#dup-name').value.trim();
-  if (state.dirty) await save(); // que la copia lleve los últimos cambios
+  // Que la copia lleve los últimos cambios (solo la captura; el clip del juego no se toca).
+  if (state.dirty && state.capture) {
+    await api(`capture/${state.name}`, { method: 'PUT', body: JSON.stringify(state.capture) });
+    state.dirty = false;
+    clearDraft();
+  }
   try {
     await api(`duplicate/${state.name}`, { method: 'POST', body: JSON.stringify({ to }) });
     $('#dup-form').classList.remove('show');
@@ -501,6 +570,7 @@ async function analyze() {
         .filter((k) => k.f >= 0 && k.f < frames.length),
     };
     await api(`capture/${state.name}`, { method: 'PUT', body: JSON.stringify(cap) });
+    clearDraft(); // el análisis nuevo ya lleva los keyframes y ajustes
     loadCapture(cap);
     await refreshLibrary();
     status(`Analizado: ${frames.length} fotogramas a ${fmt(fps, 1)} fps · jugador en ${detected} · ${statsText()}. Ajusta y pulsa GUARDAR EN EL JUEGO.`, 'ok');
@@ -529,6 +599,7 @@ async function save() {
     await api(`capture/${state.name}`, { method: 'PUT', body: JSON.stringify(state.capture) });
     const r = await api<{ path: string }>(`clip/${state.name}`, { method: 'PUT', body: JSON.stringify(clip) });
     state.dirty = false;
+    clearDraft();
     await refreshLibrary();
     status(`Guardado en ${r.path} (salto ×${fmt(clip.exaggerate.jump)}, movimiento ×${fmt(clip.exaggerate.pose)}).`, 'ok');
   } catch (err) {
@@ -599,18 +670,22 @@ function seekFrame(f: number) {
   seek(cap.range[0] + f / cap.fps + 0.0005);
 }
 function renderKeys() {
-  const bar = $('#range-bar');
-  bar.querySelectorAll('.key').forEach((e) => e.remove());
+  const box = $('#tl-keys');
+  box.replaceChildren();
   const cap = state.capture;
   const d = video.duration || 0;
   if (!cap || !d) return;
   for (const k of cap.ballKeys ?? []) {
     const el = document.createElement('div');
-    el.className = 'key';
-    el.style.left = `${((cap.range[0] + k.f / cap.fps) / d) * 100}%`;
-    el.title = `Keyframe del balón · fotograma ${k.f + 1}`;
-    el.onclick = () => seekFrame(k.f);
-    bar.append(el);
+    el.className = 'tl-key';
+    const t = cap.range[0] + k.f / cap.fps;
+    el.style.left = `${(t / d) * 100}%`;
+    el.title = `Keyframe del balón · fotograma ${frameAt(t) + 1}`;
+    el.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      seekFrame(k.f);
+    });
+    box.append(el);
   }
   updateKeyUi();
 }
@@ -760,10 +835,7 @@ function onSliders(user = true) {
   $('#ex-pose-v').textContent = `×${fmt(e.pose)}`;
   if (state.mocap) state.mocap.exaggerate = e;
   if (state.capture) state.capture.exaggerate = e;
-  if (user && state.capture) {
-    state.dirty = true;
-    status('Cambios sin guardar: pulsa GUARDAR EN EL JUEGO para que el juego use esta exageración.');
-  }
+  if (user && state.capture) markDirty('Cambios sin guardar: pulsa GUARDAR EN EL JUEGO para que el juego use esta exageración.');
 }
 jumpIn.oninput = () => onSliders();
 poseIn.oninput = () => onSliders();
@@ -782,16 +854,7 @@ function updateRangeUi() {
     ? ''
     : `Clip: ${fmt(a)}–${fmt(b)} s (${fmt(b - a)} s)` +
       (cap ? (inside ? ` · ${state.baked?.world.length ?? 0} fotogramas` : ' · ⚠ sale de lo analizado: pulsa ANALIZAR') : '');
-  const bar = $('#bar-range');
-  bar.style.left = `${d ? (a / d) * 100 : 0}%`;
-  bar.style.width = `${d ? ((b - a) / d) * 100 : 0}%`;
-  const done = $('#bar-done');
-  const r = state.capture?.range;
-  done.style.display = r ? '' : 'none';
-  if (r && d) {
-    done.style.left = `${(r[0] / d) * 100}%`;
-    done.style.width = `${((r[1] - r[0]) / d) * 100}%`;
-  }
+  renderTimeline();
 }
 /** Aplica inicio/fin: si cae dentro de lo analizado, recorta el clip al momento (sin volver a analizar). */
 function applyRange() {
@@ -809,11 +872,11 @@ function applyRange() {
   updateRangeUi();
 }
 const markIn = () => {
-  state.range[0] = Math.min(video.currentTime, state.range[1] - 0.2);
+  state.range[0] = Math.min(timeOf(frameAt(video.currentTime)), state.range[1] - 0.2);
   applyRange();
 };
 const markOut = () => {
-  state.range[1] = Math.max(video.currentTime, state.range[0] + 0.2);
+  state.range[1] = Math.max(timeOf(frameAt(video.currentTime)), state.range[0] + 0.2);
   applyRange();
 };
 $('#mark-in').onclick = markIn;
@@ -848,10 +911,126 @@ video.addEventListener('ended', () => {
   }
 });
 playBtn.onclick = () => setPlaying(!state.playing);
-scrub.oninput = () => {
+// --- Línea de tiempo ------------------------------------------------------------------------
+/**
+ * Fotogramas: se numeran desde el inicio del vídeo, sobre la misma rejilla que el análisis
+ * (inicio de lo analizado + i / fps), para que "fotograma N" sea siempre el mismo.
+ */
+const fpsNow = () => state.capture?.fps ?? state.videoFps;
+const gridBase = () => state.capture?.range[0] ?? 0;
+const frameAt = (t: number) => Math.max(0, Math.round(gridBase() * fpsNow()) + Math.round((t - gridBase()) * fpsNow()));
+const timeOf = (idx: number) => gridBase() + (idx - Math.round(gridBase() * fpsNow())) / fpsNow();
+const totalFrames = () => Math.max(1, Math.floor((video.duration || 0) * fpsNow()));
+/** Salta a un fotograma exacto (un pelín después de su instante, para que el navegador muestre ese y no el anterior). */
+function seekToFrame(idx: number) {
+  seek(timeOf(Math.max(0, Math.min(totalFrames() - 1, idx))) + 0.0005);
+}
+const pct = (t: number) => `${(t / (video.duration || 1)) * 100}%`;
+let drag: 'head' | 'in' | 'out' | null = null;
+
+function renderTicks() {
+  const box = $('#tl-ticks');
+  box.replaceChildren();
+  const d = video.duration || 0;
+  if (!d) return;
+  const fps = fpsNow();
+  const w = timeline.getBoundingClientRect().width;
+  // Una marca por fotograma si caben (≥ 4 px); si no, cada 5, 10, 15 o 30.
+  const step = [1, 5, 10, 15, 30].find((n) => (w / (d * fps)) * n >= 4) ?? Math.round(fps);
+  const frag = document.createDocumentFragment();
+  for (let i = 0; i <= d * fps; i += step) {
+    const el = document.createElement('i');
+    const t = i / fps;
+    if (Math.abs(t - Math.round(t)) < 0.5 / fps) el.className = 'big';
+    el.style.left = pct(t);
+    frag.append(el);
+  }
+  box.append(frag);
+}
+new ResizeObserver(renderTicks).observe(timeline);
+
+function renderTimeline() {
+  const d = video.duration || 0;
+  const [a, b] = state.range;
+  const cap = state.capture;
+  const show = (id: string, on: boolean) => ($(id).style.display = on ? '' : 'none');
+  show('#tl-in', !!d);
+  show('#tl-out', !!d);
+  if (!d) return;
+  $('#tl-in').style.left = pct(a);
+  $('#tl-out').style.left = pct(b);
+  const clip = $('#tl-clip');
+  clip.style.left = pct(a);
+  clip.style.width = pct(b - a);
+  $('#tl-dim-l').style.cssText = `left:0;width:${pct(a)}`;
+  $('#tl-dim-r').style.cssText = `left:${pct(b)};right:0`;
+  const an = $('#tl-analyzed');
+  show('#tl-analyzed', !!cap);
+  if (cap) {
+    an.style.left = pct(cap.range[0]);
+    an.style.width = pct(cap.range[1] - cap.range[0]);
+  }
+}
+
+/** Cabezal y textos de tiempo: fotograma exacto en el que estamos. */
+function renderHead() {
+  const d = video.duration || 0;
+  const t = video.currentTime;
+  const idx = frameAt(t);
+  $('#tl-head').style.left = pct(t);
+  const label = $('#tl-label');
+  label.style.left = pct(t);
+  label.textContent = `fotograma ${idx + 1}`;
+  const clipIdx = state.capture && state.baked ? bakedIndex(currentFrame()) : -1;
+  $('#time').innerHTML =
+    `<b>fotograma ${idx + 1}</b> / ${totalFrames()} · ${fmt(t, 3)} / ${fmt(d)} s` +
+    (state.baked ? ` · clip ${clipIdx >= 0 ? `${clipIdx + 1}/${state.baked.world.length}` : 'fuera'}` : '');
+}
+
+/** Tiempo (ajustado al fotograma) bajo el ratón. */
+function timelineFrame(e: PointerEvent): number {
+  const r = timeline.getBoundingClientRect();
+  const u = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+  return Math.max(0, Math.min(totalFrames() - 1, frameAt(u * (video.duration || 0))));
+}
+function dragTo(e: PointerEvent) {
+  const idx = timelineFrame(e);
+  const t = timeOf(idx);
+  const minLen = 0.2;
+  if (drag === 'head') return seekToFrame(idx);
+  if (drag === 'in') state.range[0] = Math.max(0, Math.min(t, state.range[1] - minLen));
+  if (drag === 'out') state.range[1] = Math.min(video.duration || t, Math.max(t, state.range[0] + minLen));
+  // Mientras se arrastra un indicador, el vídeo enseña ese fotograma.
+  const edge = drag === 'in' ? state.range[0] : state.range[1];
+  seek(edge + 0.0005);
+  const hl = $('#tl-hlabel');
+  hl.classList.remove('hidden');
+  hl.style.left = pct(edge);
+  hl.textContent = `${drag === 'in' ? 'inicio' : 'fin'}: fotograma ${frameAt(edge) + 1}`;
+  updateRangeUi();
+}
+timeline.addEventListener('pointerdown', (e) => {
+  if (!video.duration || state.analyzing) return;
+  const target = e.target as HTMLElement;
+  drag = target.id === 'tl-in' ? 'in' : target.id === 'tl-out' ? 'out' : 'head';
   setPlaying(false);
-  seek((Number(scrub.value) / 10000) * (video.duration || 0));
+  try {
+    timeline.setPointerCapture(e.pointerId);
+  } catch {
+    /* puntero no capturable (p. ej. evento sintético): se sigue igual */
+  }
+  dragTo(e);
+});
+timeline.addEventListener('pointermove', (e) => drag && dragTo(e));
+const endDrag = () => {
+  if (!drag) return;
+  const was = drag;
+  drag = null;
+  $('#tl-hlabel').classList.add('hidden');
+  if (was !== 'head') applyRange(); // al soltar un indicador se recorta el clip
 };
+timeline.addEventListener('pointerup', endDrag);
+timeline.addEventListener('pointercancel', endDrag);
 document.querySelectorAll<HTMLButtonElement>('[data-speed]').forEach((b) => {
   b.onclick = () => {
     currentSpeed = Number(b.dataset.speed);
@@ -884,8 +1063,7 @@ addEventListener('keydown', (e) => {
   } else if (e.code === 'ArrowRight' || e.code === 'ArrowLeft') {
     e.preventDefault();
     setPlaying(false);
-    const fps = state.capture?.fps ?? 30;
-    seek(video.currentTime + (e.code === 'ArrowRight' ? 1 : -1) / fps);
+    seekToFrame(frameAt(video.currentTime) + (e.code === 'ArrowRight' ? 1 : -1));
   } else if (e.code === 'KeyI') markIn();
   else if (e.code === 'KeyO') markOut();
   else if (e.code === 'KeyB') setEditing(!state.editing);
@@ -1060,10 +1238,8 @@ function updateHandle(fAbs: number) {
 }
 
 function frame() {
-  const d = video.duration || 0;
   const t = video.currentTime;
-  $('#time').textContent = `${fmt(t)} / ${fmt(d)} s`;
-  if (document.activeElement !== scrub && d) scrub.value = String(Math.round((t / d) * 10000));
+  renderHead();
 
   const cap = state.capture;
   if (cap && !state.analyzing) {
@@ -1098,4 +1274,4 @@ await refreshLibrary();
 const want = new URLSearchParams(location.search).get('c');
 if (want && library.some((i) => i.name === want)) await open(want);
 else if (library[0]) await open(library[0].name);
-if (import.meta.env.DEV) Object.assign(window, { __studio: { state, analyze, save, seek, setPlaying, seekFrame, setKey, setKey3D, exportLandmarks, setEditing, applyRange, keyHandle, gizmo, player } });
+if (import.meta.env.DEV) Object.assign(window, { __studio: { state, frameAt, timeOf, seekToFrame, analyze, save, seek, setPlaying, seekFrame, setKey, setKey3D, exportLandmarks, setEditing, applyRange, keyHandle, gizmo, player } });

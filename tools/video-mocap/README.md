@@ -46,7 +46,11 @@ npm run studio        # abre http://localhost:5180/studio.html
 Todo en local y en el navegador (MediaPipe Pose para web; sin Python):
 
 1. **＋ Abrir vídeo…** (o arrastrarlo) y ponerle nombre → se copia a `data/<nombre>/video.<ext>` (fuera de git).
-2. Opcional: marcar el tramo con **Inicio aquí / Fin aquí** (teclas I / O). Después de analizar, esos mismos
+   **Línea de tiempo**: el cabezal se ajusta a fotogramas exactos y su etiqueta dice en qué fotograma estás
+   (numerados desde el inicio del vídeo, en la misma rejilla que el análisis; ←/→ avanzan de uno en uno).
+   Los indicadores amarillos **[ ]** marcan inicio y fin del clip: se arrastran (el vídeo enseña el fotograma
+   mientras tanto) y al soltar se recorta. Verde = analizado; rombos = keyframes del balón.
+2. Opcional: marcar el tramo con **Inicio aquí / Fin aquí** (teclas I / O) o con los indicadores. Después de analizar, esos mismos
    botones **recortan el clip** al momento (sin volver a analizar): lo de fuera no entra en el clip ni en los
    landmarks. **Sin recorte** lo quita. Si el nuevo tramo se sale de lo analizado, pide ANALIZAR (los keyframes
    se conservan, recolocados por tiempo).
@@ -70,6 +74,9 @@ Todo en local y en el navegador (MediaPipe Pose para web; sin Python):
    corregido (relleno = keyframe). Los keyframes se guardan en `capture.json` (no hace falta volver a analizar).
 7. **GUARDAR EN EL JUEGO** → `apps/client/src/content/anims/<nombre>.json` (con la exageración elegida).
 8. **EXPORTAR LANDMARKS** → `data/<nombre>/landmarks.json` (y se descarga). Ver formato abajo.
+Lo que se edita (keyframes, recorte, pies, exageración) se guarda al momento como **borrador** en el navegador:
+si la página se recarga o se cierra sin GUARDAR, al volver a abrir la captura se recupera (lo dice arriba).
+
 9. **⧉ Duplicar captura** (barra lateral): copia vídeo (clon APFS, sin ocupar espacio extra), análisis,
    keyframes, recorte y exageración con otro nombre, para sacar otro clip de otra sección del mismo vídeo.
 
