@@ -46,7 +46,10 @@ npm run studio        # abre http://localhost:5180/studio.html
 Todo en local y en el navegador (MediaPipe Pose para web; sin Python):
 
 1. **＋ Abrir vídeo…** (o arrastrarlo) y ponerle nombre → se copia a `data/<nombre>/video.<ext>` (fuera de git).
-2. Opcional: marcar el tramo con **Inicio aquí / Fin aquí** (teclas I / O).
+2. Opcional: marcar el tramo con **Inicio aquí / Fin aquí** (teclas I / O). Después de analizar, esos mismos
+   botones **recortan el clip** al momento (sin volver a analizar): lo de fuera no entra en el clip ni en los
+   landmarks. **Sin recorte** lo quita. Si el nuevo tramo se sale de lo analizado, pide ANALIZAR (los keyframes
+   se conservan, recolocados por tiempo).
 3. **ANALIZAR**: mide los fps del vídeo, saca la pose fotograma a fotograma y busca el balón
    (`src/mocap/ball-detect.ts`: mancha naranja redonda del tamaño esperado; descarta cara, piel y zapatillas
    naranjas y saltos imposibles). Se guarda en `data/<nombre>/capture.json`. Mientras analiza se puede seguir
@@ -54,14 +57,21 @@ Todo en local y en el navegador (MediaPipe Pose para web; sin Python):
 4. Ajustar **Salto** (×0–4) y **Movimiento** (×0–2,5: cuánto se aparta cada articulación de la postura de reposo).
 5. **Pies fijos** (activado por defecto): detecta cuándo cada pie está apoyado y lo clava en el suelo; el cuerpo
    se desplaza sobre él (desplazamiento de la raíz). En el rig se resuelve con cinemática inversa de dos huesos.
-6. **Corregir el balón** con keyframes: **Editar balón** (tecla B) y clic/arrastrar sobre el vídeo donde está el
-   balón en ese fotograma. Un keyframe manda en su fotograma; entre dos keyframes a menos de 0,75 s se interpola
+6. **Corregir el balón** con keyframes: **Editar balón** (tecla B) y
+   - clic/arrastrar sobre el vídeo (mueve X/Y y conserva la profundidad),
+   - arrastrar las flechas X/Y/Z del asa verde en la vista 3D, o
+   - escribir **X Y Z** en metros (X/Z respecto a la cadera —X a la derecha de la cámara, Z hacia ella—,
+     Y = altura sobre el suelo).
+
+    Un keyframe manda en su fotograma; entre dos keyframes a menos de 0,75 s se interpola
    (sustituye a la detección); un keyframe suelto corrige la detección de alrededor y se desvanece en 0,15 s.
    Cada keyframe puede forzar la mano (automática / izquierda / derecha / suelto). `,` `.` saltan entre
    keyframes y Supr borra el del fotograma actual. Sobre el vídeo: amarillo discontinuo = detectado, verde =
    corregido (relleno = keyframe). Los keyframes se guardan en `capture.json` (no hace falta volver a analizar).
 7. **GUARDAR EN EL JUEGO** → `apps/client/src/content/anims/<nombre>.json` (con la exageración elegida).
 8. **EXPORTAR LANDMARKS** → `data/<nombre>/landmarks.json` (y se descarga). Ver formato abajo.
+9. **⧉ Duplicar captura** (barra lateral): copia vídeo (clon APFS, sin ocupar espacio extra), análisis,
+   keyframes, recorte y exageración con otro nombre, para sacar otro clip de otra sección del mismo vídeo.
 
 ### Formato de `landmarks.json` (landmarks limpios, antes del retargeting)
 

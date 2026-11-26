@@ -5,6 +5,7 @@
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import { lookFor } from '../content/teams';
 import { buildCourt } from '../render/court';
@@ -80,6 +81,19 @@ skeleton.add(skelBall);
 skeleton.visible = false;
 scene.add(skeleton);
 
+// Asa del keyframe del balón (se mueve con flechas X/Y/Z en la vista 3D).
+const keyHandle = new THREE.Mesh(new THREE.IcosahedronGeometry(BALL_R * 1.08, 1), new THREE.MeshBasicMaterial({ color: 0x6fe3a0, wireframe: true }));
+keyHandle.visible = false;
+scene.add(keyHandle);
+const gizmo = new TransformControls(camera, canvas);
+gizmo.setSize(0.8);
+gizmo.attach(keyHandle);
+gizmo.enabled = false;
+const gizmoHelper = gizmo.getHelper();
+gizmoHelper.visible = false;
+scene.add(gizmoHelper);
+gizmo.addEventListener('dragging-changed', (e) => (controls.enabled = !e.value));
+
 // --- Estado --------------------------------------------------------------------------------
 const state = {
   name: '',
@@ -92,7 +106,7 @@ const state = {
   overlay: true,
   pixel: true,
   playing: false,
-  /** Tramo a analizar (segundos del vídeo). */
+  /** Inicio y fin del clip (segundos del vídeo): recorta lo analizado o marca qué analizar. */
   range: [0, 0] as [number, number],
   analyzing: false,
   cancel: false,
@@ -163,10 +177,11 @@ async function open(name: string) {
     await new Promise<void>((ok) => video.addEventListener('loadedmetadata', () => ok(), { once: true }));
   } else video.removeAttribute('src');
   state.range = [0, video.duration || 0];
+  $<HTMLButtonElement>('#dup').disabled = !it.video;
   if (it.capture) {
     const cap = await api<Capture>(`capture/${name}`);
     loadCapture(cap);
-    status(`${name}: ${cap.frames.length} fotogramas a ${fmt(cap.fps, 1)} fps · ${statsText()}`, 'ok');
+    status(`${name}: clip de ${state.baked!.world.length} fotogramas a ${fmt(cap.fps, 1)} fps · ${statsText()}`, 'ok');
   } else status(it.video ? `${name}: sin analizar. Marca el tramo (opcional) y pulsa ANALIZAR.` : `${name}: falta el vídeo.`);
   seek(state.range[0]);
   updateRangeUi();
@@ -175,13 +190,13 @@ async function open(name: string) {
 function statsText() {
   const s = state.baked?.stats;
   if (!s || !state.capture) return '';
-  return `balón visto en ${Math.round((s.ballSeen / state.capture.frames.length) * 100)} % · salto máx. ${Math.round(s.maxJump * 100)} cm`;
+  return `balón visto en ${Math.round((s.ballSeen / state.baked!.world.length) * 100)} % · salto máx. ${Math.round(s.maxJump * 100)} cm`;
 }
 
 function loadCapture(cap: Capture) {
   cap.exaggerate = { ...DEFAULT_EXAGGERATE, ...cap.exaggerate };
   state.capture = cap;
-  state.range = [...cap.range];
+  state.range = [...(cap.trim ?? cap.range)];
   cap.ballKeys ??= [];
   cap.feetLock ??= true;
   $('#feet').setAttribute('aria-pressed', String(cap.feetLock));
@@ -268,6 +283,31 @@ $<HTMLFormElement>('#new-form').onsubmit = async (e) => {
     status(`No se pudo crear: ${(err as Error).message}`, 'bad');
   }
 };
+// --- Duplicar --------------------------------------------------------------------------------
+$('#dup').onclick = () => {
+  if (!state.name) return;
+  let name = `${state.name.slice(0, 36)}-2`;
+  for (let k = 3; library.some((i) => i.name === name); k++) name = `${state.name.slice(0, 36)}-${k}`;
+  $<HTMLInputElement>('#dup-name').value = name;
+  $('#dup-form').classList.add('show');
+  $<HTMLInputElement>('#dup-name').focus();
+};
+$('#dup-cancel').onclick = () => $('#dup-form').classList.remove('show');
+$<HTMLFormElement>('#dup-form').onsubmit = async (e) => {
+  e.preventDefault();
+  const to = $<HTMLInputElement>('#dup-name').value.trim();
+  if (state.dirty) await save(); // que la copia lleve los últimos cambios
+  try {
+    await api(`duplicate/${state.name}`, { method: 'POST', body: JSON.stringify({ to }) });
+    $('#dup-form').classList.remove('show');
+    await refreshLibrary();
+    await open(to);
+    status(`Copia creada: ${to}. Marca otro inicio/fin (o analiza otra parte del vídeo) para sacar otro clip.`, 'ok');
+  } catch (err) {
+    status(`No se pudo duplicar: ${(err as Error).message}`, 'bad');
+  }
+};
+
 addEventListener('dragover', (e) => {
   e.preventDefault();
   document.body.classList.add('dragging');
@@ -454,6 +494,11 @@ async function analyze() {
       range: [a, a + frames.length / fps],
       frames,
       exaggerate: state.capture?.exaggerate ?? { ...DEFAULT_EXAGGERATE },
+      feetLock: state.capture?.feetLock ?? true,
+      // Los keyframes se conservan: se recolocan por tiempo en el nuevo análisis.
+      ballKeys: (state.capture?.ballKeys ?? [])
+        .map((k) => ({ ...k, f: Math.round((state.capture!.range[0] + k.f / state.capture!.fps - a) * fps) }))
+        .filter((k) => k.f >= 0 && k.f < frames.length),
     };
     await api(`capture/${state.name}`, { method: 'PUT', body: JSON.stringify(cap) });
     loadCapture(cap);
@@ -530,6 +575,23 @@ function currentFrame(): number {
   return Math.max(0, Math.min(cap.frames.length - 1, Math.round(tc * cap.fps)));
 }
 const keyAt = (f: number) => state.capture?.ballKeys?.find((k) => k.f === f) ?? null;
+/** Índice dentro del clip recortado (lo que usan los datos horneados), o −1 si queda fuera del recorte. */
+function bakedIndex(f: number): number {
+  const b = state.baked;
+  if (!b || f < 0) return -1;
+  const i = f - b.f0;
+  return i >= 0 && i < b.world.length ? i : -1;
+}
+const xyz = ['#key-x', '#key-y', '#key-z'].map((id) => $<HTMLInputElement>(id));
+/** Posición 3D local del balón en este fotograma: la del keyframe o, si no hay, la actual (detectada/corregida). */
+function ballLocalAt(f: number): [number, number, number] | null {
+  const k = keyAt(f);
+  const i = bakedIndex(f);
+  if (k?.p) return k.p;
+  if (i < 0 || !state.baked) return null;
+  if (k) return state.baked.imageToLocal(i, k.x, k.y);
+  return state.baked.ballLocal[i] ?? null;
+}
 function seekFrame(f: number) {
   const cap = state.capture;
   if (!cap) return;
@@ -558,18 +620,56 @@ function updateKeyUi() {
   $('#key-text').textContent = `${n} keyframe${n === 1 ? '' : 's'}${k ? ` · este fotograma tiene uno` : ''}`;
   handSel.value = k?.hand ?? 'auto';
   $<HTMLButtonElement>('#key-del').disabled = !k;
+  const f = currentFrame();
+  const p = ballLocalAt(f);
+  xyz.forEach((inp, c) => {
+    inp.disabled = !p || bakedIndex(f) < 0;
+    if (document.activeElement !== inp) inp.value = p ? p[c]!.toFixed(2) : '';
+  });
 }
-/** Pone (o mueve) el keyframe del fotograma actual en la posición de imagen dada (0–1). */
-function setKey(x: number, y: number) {
+/** Pone (o mueve) el keyframe del fotograma actual en una posición 3D local (metros). */
+function setKey3D(p: [number, number, number]) {
   const cap = state.capture;
   const f = currentFrame();
-  if (!cap || f < 0) return;
+  const i = bakedIndex(f);
+  if (!cap || i < 0 || !state.baked) {
+    status('Este fotograma queda fuera del clip (recorte): muévete dentro para editar el balón.', 'bad');
+    return;
+  }
+  p[1] = Math.max(0.12, p[1]); // el balón no atraviesa el suelo
+  const im = state.baked.localToImage(i, p) ?? { x: 0.5, y: 0.5 };
   const k = keyAt(f);
-  if (k) Object.assign(k, { x, y });
-  else cap.ballKeys!.push({ f, x, y, hand: handSel.value as HandOverride } satisfies BallKey);
+  if (k) Object.assign(k, { x: im.x, y: im.y, p });
+  else cap.ballKeys!.push({ f, x: im.x, y: im.y, p, hand: handSel.value as HandOverride } satisfies BallKey);
   queueRebake();
   markDirty('Balón corregido (sin guardar).');
 }
+/** Clic sobre el vídeo: mueve X/Y y conserva la profundidad (Z) que tuviera el keyframe. */
+function setKey(x: number, y: number) {
+  const f = currentFrame();
+  const i = bakedIndex(f);
+  if (i < 0 || !state.baked) return setKey3D([0, 0, 0]);
+  const p = state.baked.imageToLocal(i, x, y, keyAt(f)?.p?.[2]);
+  if (p) setKey3D(p);
+}
+xyz.forEach((inp, c) =>
+  inp.addEventListener('change', () => {
+    const p = ballLocalAt(currentFrame());
+    const v = Number(inp.value);
+    if (!p || !Number.isFinite(v)) return;
+    const q: [number, number, number] = [...p];
+    q[c] = v;
+    setKey3D(q);
+  }),
+);
+// Arrastrar las flechas de la vista 3D: de la escena a metros locales del balón.
+gizmo.addEventListener('objectChange', () => {
+  const b = state.baked;
+  const i = bakedIndex(currentFrame());
+  if (!b || i < 0) return;
+  const w = vA.copy(keyHandle.position).sub(player.root.position).multiplyScalar(1 / (b.scale * RIG));
+  setKey3D(b.worldToLocal(i, [w.x, w.y, w.z]));
+});
 function jumpKey(dir: 1 | -1) {
   const keys = state.capture?.ballKeys ?? [];
   const f = currentFrame();
@@ -588,9 +688,10 @@ function setEditing(on: boolean) {
   state.editing = on && !!state.capture;
   document.body.classList.toggle('editing', state.editing);
   $('#edit').setAttribute('aria-pressed', String(state.editing));
+  gizmo.enabled = state.editing;
   if (state.editing) {
     setPlaying(false);
-    status('Editar balón: haz clic o arrastra sobre el vídeo donde está el balón en este fotograma. ←/→ para moverte.');
+    status('Editar balón: clic/arrastrar sobre el vídeo (X/Y), flechas de la vista 3D (X/Y/Z) o las casillas X Y Z. ←/→ para moverte.');
   }
 }
 $('#edit').onclick = () => setEditing(!state.editing);
@@ -605,13 +706,15 @@ handSel.onchange = () => {
   if (k) k.hand = handSel.value as HandOverride;
   else {
     // Sin keyframe aquí: se crea uno donde está ahora el balón (corregido o detectado).
-    const b = state.baked?.ball2d[f];
-    if (!b) {
+    const p = ballLocalAt(f);
+    const i = bakedIndex(f);
+    const im = p && i >= 0 ? state.baked!.localToImage(i, p) : null;
+    if (!p || !im) {
       status('Primero coloca el balón en este fotograma (Editar balón y clic sobre el vídeo).', 'bad');
       handSel.value = 'auto';
       return;
     }
-    cap.ballKeys!.push({ f, x: b.x, y: b.y, hand: handSel.value as HandOverride });
+    cap.ballKeys!.push({ f, x: im.x, y: im.y, p: [...p], hand: handSel.value as HandOverride });
   }
   rebake();
   markDirty('Mano del keyframe cambiada (sin guardar).');
@@ -673,7 +776,12 @@ $('#ex-reset').onclick = () => {
 function updateRangeUi() {
   const d = video.duration || 0;
   const [a, b] = state.range;
-  $('#range-text').textContent = d ? `Tramo: ${fmt(a)}–${fmt(b)} s (${fmt(b - a)} s)` : '';
+  const cap = state.capture;
+  const inside = cap && a >= cap.range[0] - 0.5 / cap.fps && b <= cap.range[1] + 0.5 / cap.fps;
+  $('#range-text').textContent = !d
+    ? ''
+    : `Clip: ${fmt(a)}–${fmt(b)} s (${fmt(b - a)} s)` +
+      (cap ? (inside ? ` · ${state.baked?.world.length ?? 0} fotogramas` : ' · ⚠ sale de lo analizado: pulsa ANALIZAR') : '');
   const bar = $('#bar-range');
   bar.style.left = `${d ? (a / d) * 100 : 0}%`;
   bar.style.width = `${d ? ((b - a) / d) * 100 : 0}%`;
@@ -685,19 +793,34 @@ function updateRangeUi() {
     done.style.width = `${((r[1] - r[0]) / d) * 100}%`;
   }
 }
+/** Aplica inicio/fin: si cae dentro de lo analizado, recorta el clip al momento (sin volver a analizar). */
+function applyRange() {
+  const cap = state.capture;
+  if (cap) {
+    const tol = 0.5 / cap.fps;
+    const [a, b] = state.range;
+    if (a >= cap.range[0] - tol && b <= cap.range[1] + tol) {
+      const whole = Math.abs(a - cap.range[0]) <= tol && Math.abs(b - cap.range[1]) <= tol;
+      cap.trim = whole ? undefined : [Math.max(a, cap.range[0]), Math.min(b, cap.range[1])];
+      rebake();
+      markDirty(`Clip recortado a ${fmt(a)}–${fmt(b)} s (${state.baked!.world.length} fotogramas). Sin guardar.`);
+    } else status(`El clip se sale de lo analizado (${fmt(cap.range[0])}–${fmt(cap.range[1])} s): pulsa ANALIZAR para analizar ${fmt(a)}–${fmt(b)} s.`);
+  }
+  updateRangeUi();
+}
 const markIn = () => {
   state.range[0] = Math.min(video.currentTime, state.range[1] - 0.2);
-  updateRangeUi();
+  applyRange();
 };
 const markOut = () => {
   state.range[1] = Math.max(video.currentTime, state.range[0] + 0.2);
-  updateRangeUi();
+  applyRange();
 };
 $('#mark-in').onclick = markIn;
 $('#mark-out').onclick = markOut;
 $('#mark-reset').onclick = () => {
-  state.range = [0, video.duration || 0];
-  updateRangeUi();
+  state.range = state.capture ? [...state.capture.range] : [0, video.duration || 0];
+  applyRange();
 };
 
 // --- Reproducción --------------------------------------------------------------------------
@@ -714,13 +837,13 @@ function setPlaying(on: boolean) {
 }
 video.loop = false;
 video.addEventListener('timeupdate', () => {
-  // Con captura, la reproducción va en bucle por el tramo analizado.
-  const r = state.capture?.range;
-  if (state.playing && r && video.currentTime >= r[1]) seek(r[0]);
+  // Con captura, la reproducción va en bucle por el clip (recorte incluido).
+  const r = state.baked?.range;
+  if (state.playing && r && (video.currentTime >= r[1] || video.currentTime < r[0] - 0.05)) seek(r[0]);
 });
 video.addEventListener('ended', () => {
   if (state.playing) {
-    seek(state.capture?.range[0] ?? 0);
+    seek(state.baked?.range[0] ?? 0);
     void video.play();
   }
 });
@@ -752,7 +875,9 @@ toggle('#clean', 'clean', () => {
   pickClip();
 });
 addEventListener('keydown', (e) => {
-  if ((e.target as HTMLElement).tagName === 'INPUT' && (e.target as HTMLInputElement).type === 'text') return;
+  // Escribiendo en un campo (nombre, X/Y/Z…) los atajos no cuentan.
+  const el = e.target as HTMLElement;
+  if (el.tagName === 'SELECT' || el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && (el as HTMLInputElement).type !== 'range')) return;
   if (e.code === 'Space') {
     e.preventDefault();
     setPlaying(!state.playing);
@@ -837,7 +962,8 @@ function drawOverlay(f: CaptureFrame | null, i = -1) {
     ctx.stroke();
     ctx.setLineDash([]);
   }
-  const fixed = i >= 0 ? state.baked?.ball2d[i] : null;
+  const bi = bakedIndex(i);
+  const fixed = bi >= 0 ? state.baked?.ball2d[bi] : null;
   if (fixed && fixed.source !== 'det') {
     const [x, y] = P(fixed.x, fixed.y);
     ctx.strokeStyle = '#6fe3a0';
@@ -852,13 +978,15 @@ function drawOverlay(f: CaptureFrame | null, i = -1) {
   }
 }
 
-function update3d(tc: number, f: number) {
+/** @param tc segundos dentro del clip · @param f fotograma del clip · @param fAbs fotograma de lo analizado */
+function update3d(tc: number, f: number, fAbs = f) {
   const baked = state.clean ? state.baked : state.bakedRaw;
   const has = !!(state.mocap && baked);
   player.root.visible = has;
   ball.visible = has;
   $('#empty').style.display = has || !video.src ? 'none' : '';
   skeleton.visible = has && state.skeleton;
+  updateHandle(fAbs);
   if (!has) return;
   player.root.position.x = state.skeleton ? -0.75 : 0;
   skeleton.position.x = 0.75;
@@ -915,7 +1043,20 @@ function update3d(tc: number, f: number) {
   const seen = { det: 'visto', key: 'keyframe', interp: 'interpolado', fix: 'corregido' }[src ?? 'det'];
   const where = hold > 0.5 ? (m.holdL > m.holdR ? 'mano izq.' : 'mano der.') : 'suelto';
   const feet = [m.footWL > 0.5 ? 'izq.' : '', m.footWR > 0.5 ? 'der.' : ''].filter(Boolean).join(' + ') || 'ninguno';
-  $('#info').textContent = `fotograma ${f + 1}/${state.capture!.frames.length} · balón ${src ? seen : 'no visto'} (${where}) · salto ${Math.round(m.lift * RIG * 100)} cm · apoyo: ${feet}`;
+  const out = bakedIndex(fAbs) < 0 ? ' · FUERA DEL CLIP (recortado)' : '';
+  $('#info').textContent = `fotograma ${f + 1}/${baked!.world.length}${out} · balón ${src ? seen : 'no visto'} (${where}) · salto ${Math.round(m.lift * RIG * 100)} cm · apoyo: ${feet}`;
+}
+
+/** Coloca el asa del keyframe (y sus flechas X/Y/Z) donde está el balón en este fotograma. */
+function updateHandle(fAbs: number) {
+  const b = state.baked;
+  const i = bakedIndex(fAbs);
+  const p = state.editing && b && i >= 0 ? ballLocalAt(fAbs) : null;
+  keyHandle.visible = gizmoHelper.visible = !!p;
+  gizmo.enabled = !!p;
+  if (!p || gizmo.dragging) return;
+  const w = b!.localToWorld(i, p);
+  keyHandle.position.set(w[0], w[1], w[2]).multiplyScalar(b!.scale * RIG).add(player.root.position);
 }
 
 function frame() {
@@ -934,7 +1075,10 @@ function frame() {
       updateKeyUi();
     }
     lastOverlayFrame = inside ? f : -2;
-    update3d(tc, f);
+    // El 3D va por el clip recortado (fuera del recorte se queda en su primer/último fotograma).
+    const b = state.baked!;
+    const tb = Math.max(0, Math.min(b.world.length / cap.fps - 1e-3, t - b.range[0]));
+    update3d(tb, Math.min(b.world.length - 1, Math.round(tb * cap.fps)), f);
   } else if (!state.analyzing) {
     update3d(0, 0);
     drawOverlay(null);
@@ -954,4 +1098,4 @@ await refreshLibrary();
 const want = new URLSearchParams(location.search).get('c');
 if (want && library.some((i) => i.name === want)) await open(want);
 else if (library[0]) await open(library[0].name);
-if (import.meta.env.DEV) Object.assign(window, { __studio: { state, analyze, save, seek, setPlaying, seekFrame, setKey, exportLandmarks, setEditing } });
+if (import.meta.env.DEV) Object.assign(window, { __studio: { state, analyze, save, seek, setPlaying, seekFrame, setKey, setKey3D, exportLandmarks, setEditing, applyRange, keyHandle, gizmo, player } });

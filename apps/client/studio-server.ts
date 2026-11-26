@@ -6,8 +6,10 @@
  *   tools/video-mocap/data/<nombre>/capture.json    análisis de MediaPipe + balón + keyframes + exageración
  *   tools/video-mocap/data/<nombre>/landmarks.json  landmarks limpios exportados (fuera de git)
  *   apps/client/src/content/anims/<nombre>.json     clip horneado que lee el juego
+ *
+ * También duplica capturas (vídeo clonado + captura) para sacar varios clips de un mismo vídeo.
  */
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { constants, copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -127,6 +129,24 @@ export function studioServer(): Plugin {
               req.on('error', fail);
             });
             return send(res, 200, { video: fsUrl(target) });
+          }
+          if (kind === 'duplicate' && req.method === 'POST') {
+            // Copia vídeo + captura con otro nombre (para sacar otro clip de otra sección del mismo vídeo).
+            const to = String(JSON.parse((await readBody(req)) || '{}').to ?? '');
+            if (!validName(to)) return send(res, 400, { error: 'Nombre nuevo no válido: minúsculas, números, - y _ (máx. 41).' });
+            if (existsSync(join(DATA, to))) return send(res, 409, { error: `Ya existe una captura llamada "${to}"` });
+            const v = videoOf(name);
+            if (!v) return send(res, 404, { error: 'La captura original no tiene vídeo' });
+            mkdirSync(join(DATA, to), { recursive: true });
+            // En APFS es un clon (no ocupa espacio extra); si no se puede, copia normal.
+            copyFileSync(v, join(DATA, to, v.slice(v.lastIndexOf('/') + 1)), constants.COPYFILE_FICLONE);
+            const cap = join(dir, 'capture.json');
+            if (existsSync(cap)) {
+              const c = JSON.parse(readFileSync(cap, 'utf8')) as { name: string };
+              c.name = to;
+              writeFileSync(join(DATA, to, 'capture.json'), JSON.stringify(c));
+            }
+            return send(res, 200, { ok: true, name: to });
           }
           if (kind === 'landmarks' && req.method === 'PUT') {
             const body = await readBody(req);

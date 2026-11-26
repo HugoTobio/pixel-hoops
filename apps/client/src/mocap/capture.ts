@@ -32,11 +32,18 @@ export interface CaptureFrame {
 
 /** Mano forzada en un keyframe del balón. */
 export type HandOverride = 'auto' | 'L' | 'R' | 'free';
-/** Corrección manual del balón en un fotograma (posición en la imagen, 0–1). */
+/**
+ * Corrección manual del balón en un fotograma.
+ * `p` es la posición 3D en metros: x/z respecto al centro de la cadera (ejes del mundo, sin girar con el
+ * jugador) e y = altura sobre el suelo. `x`/`y` es dónde cae en la imagen (0–1), solo como referencia; si
+ * falta `p` (keyframes antiguos) se calcula desde la imagen con la profundidad de la mano más cercana.
+ */
 export interface BallKey {
+  /** Fotograma, contado desde el inicio de lo analizado (no del recorte). */
   f: number;
   x: number;
   y: number;
+  p?: [number, number, number];
   hand: HandOverride;
 }
 
@@ -64,6 +71,17 @@ export interface Capture {
   ballKeys?: BallKey[];
   /** Pies fijos en el suelo mientras están apoyados (por defecto sí). */
   feetLock?: boolean;
+  /** Recorte (segundos del vídeo) dentro de lo analizado: lo de fuera no entra en el clip. */
+  trim?: [number, number];
+}
+
+/** Fotogramas (de lo analizado) que entran en el clip según el recorte: [primero, último]. */
+export function trimFrames(cap: Capture): [number, number] {
+  const n = cap.frames.length;
+  const [a, b] = cap.trim ?? cap.range;
+  const f0 = Math.max(0, Math.min(n - 2, Math.round((a - cap.range[0]) * cap.fps)));
+  const f1 = Math.max(f0 + 1, Math.min(n - 1, Math.round((b - cap.range[0]) * cap.fps)));
+  return [f0, f1];
 }
 
 /** Clip horneado: lo que lee el juego (src/mocap/clip.ts). Distancias en unidades del rig de 2,00 m. */
@@ -187,9 +205,9 @@ export interface Ball2D {
 }
 
 /** Cómo influyen los keyframes en el fotograma i. */
-function keyInfluence(keys: BallKey[], i: number, span: number, fade: number): { mode: 'none' | 'replace' | 'fade'; ks: { k: BallKey; w: number }[] } {
-  let prev: BallKey | null = null;
-  let next: BallKey | null = null;
+function keyInfluence<K extends { f: number }>(keys: K[], i: number, span: number, fade: number): { mode: 'none' | 'replace' | 'fade'; ks: { k: K; w: number }[] } {
+  let prev: K | null = null;
+  let next: K | null = null;
   for (const k of keys) {
     if (k.f <= i) prev = k;
     if (k.f >= i) {
@@ -202,65 +220,13 @@ function keyInfluence(keys: BallKey[], i: number, span: number, fade: number): {
     const u = (i - prev.f) / (next.f - prev.f);
     return { mode: 'replace', ks: [{ k: prev, w: 1 - u }, { k: next, w: u }] };
   }
-  const ks: { k: BallKey; w: number }[] = [];
+  const ks: { k: K; w: number }[] = [];
   for (const k of [prev, next]) {
     if (!k) continue;
     const d = Math.abs(i - k.f);
     if (d < fade) ks.push({ k, w: 1 - THREE.MathUtils.smoothstep(d, 0, fade) });
   }
   return { mode: ks.length ? 'fade' : 'none', ks };
-}
-
-/** Balón en la imagen por fotograma, con los keyframes aplicados, y la mano forzada (si la hay). */
-export function ballTrack2D(cap: Capture): { pos: (Ball2D | null)[]; hand: { l: number; r: number; w: number }[] } {
-  const keys = [...(cap.ballKeys ?? [])].sort((a, b) => a.f - b.f);
-  // Entre dos keyframes a menos de 0,75 s se interpola (sustituye a la detección); un keyframe suelto
-  // corrige la detección de alrededor y la corrección se desvanece en 0,15 s.
-  const span = Math.round(cap.fps * 0.75);
-  const fade = Math.max(2, Math.round(cap.fps * 0.15));
-  const det = (i: number) => {
-    const b = cap.frames[i]?.ball;
-    return b ? { x: b[0], y: b[1] } : null;
-  };
-  const pos: (Ball2D | null)[] = [];
-  const hand: { l: number; r: number; w: number }[] = [];
-  cap.frames.forEach((_, i) => {
-    const inf = keyInfluence(keys, i, span, fade);
-    const d = det(i);
-    let p: Ball2D | null = d ? { ...d, source: 'det' } : null;
-    if (inf.mode === 'replace') {
-      p = { x: 0, y: 0, source: inf.ks.length === 1 ? 'key' : 'interp' };
-      for (const { k, w } of inf.ks) {
-        p.x += k.x * w;
-        p.y += k.y * w;
-      }
-    } else if (inf.mode === 'fade') {
-      if (d) {
-        p = { ...d, source: 'fix' };
-        for (const { k, w } of inf.ks) {
-          const dk = det(k.f) ?? k;
-          p.x += (k.x - dk.x) * w;
-          p.y += (k.y - dk.y) * w;
-        }
-      } else {
-        const best = inf.ks.reduce((a, b) => (b.w > a.w ? b : a));
-        if (best.w > 0.3) p = { x: best.k.x, y: best.k.y, source: 'fix' };
-      }
-    }
-    pos.push(p);
-    // Mano forzada: media de los keyframes con mano elegida, con su peso.
-    let l = 0;
-    let r = 0;
-    let w = 0;
-    for (const { k, w: kw } of inf.ks) {
-      if (k.hand === 'auto') continue;
-      l += (k.hand === 'L' ? 1 : 0) * kw;
-      r += (k.hand === 'R' ? 1 : 0) * kw;
-      w += kw;
-    }
-    hand.push(w > 0 ? { l: l / w, r: r / w, w: Math.min(1, w) } : { l: 0, r: 0, w: 0 });
-  });
-  return { pos, hand };
 }
 
 // --- Horneado ---------------------------------------------------------------
@@ -279,9 +245,30 @@ export interface Baked {
   /** Apoyo de cada pie por frame (0–1). */
   contact: { l: number[]; r: number[] };
   stats: { legLen: number; maxJump: number; ballSeen: number; travel: number };
+  /** Primer fotograma (de lo analizado) que entra en el clip; los arrays de aquí empiezan en él. */
+  f0: number;
+  /** Tramo del vídeo que cubre el clip (segundos). */
+  range: [number, number];
+  /** Metros → unidades del rig. */
+  scale: number;
+  /** Balón "local" de un fotograma del clip ([x, y, z]: x/z respecto a la cadera, y sobre el suelo) ↔ imagen y mundo. */
+  imageToLocal(i: number, u: number, v: number, depth?: number): [number, number, number] | null;
+  localToImage(i: number, p: readonly number[]): { x: number; y: number } | null;
+  localToWorld(i: number, p: readonly number[]): [number, number, number];
+  worldToLocal(i: number, w: readonly number[]): [number, number, number];
+  /** Balón final en coordenadas locales (con keyframes aplicados), o null. */
+  ballLocal: ([number, number, number] | null)[];
 }
 
-export function bakeCapture(cap: Capture, clean = true): Baked {
+export function bakeCapture(full: Capture, clean = true): Baked {
+  // Recorte: solo los fotogramas elegidos; los keyframes se cuentan desde el nuevo inicio.
+  const [f0, f1] = trimFrames(full);
+  const cap: Capture = {
+    ...full,
+    frames: full.frames.slice(f0, f1 + 1),
+    range: [full.range[0] + f0 / full.fps, full.range[0] + f1 / full.fps],
+    ballKeys: (full.ballKeys ?? []).filter((k) => k.f >= f0 && k.f <= f1).map((k) => ({ ...k, f: k.f - f0 })),
+  };
   const N = cap.frames.length;
   const W = cap.width;
   const H = cap.height;
@@ -425,30 +412,81 @@ export function bakeCapture(cap: Capture, clean = true): Baked {
     return pts;
   });
 
-  // --- 5. Balón ---
-  const b2 = ballTrack2D(cap);
-  const ballRaw: Track = b2.pos.map((b, i) => {
+  // --- 5. Balón (en 3D "local": x/z respecto a la cadera, y = altura sobre el suelo) ---
+  const hipPx = (i: number) => {
     const hl = px(i, MP.hipL);
     const hr = px(i, MP.hipR);
-    if (!b || !hl || !hr || !Number.isFinite(mpp[i]!)) return null;
-    const hip = hl.add(hr).multiplyScalar(0.5);
-    const x = (b.x * W - hip.x) * mpp[i]!;
-    const y = -(b.y * H - hip.y) * mpp[i]!;
-    // Profundidad: la de la muñeca más cercana en el plano de la imagen.
-    const wl = P(MP.wrL, i);
-    const wr = P(MP.wrR, i);
-    const dl = Math.hypot(wl.x - x, wl.y - y);
-    const dr = Math.hypot(wr.x - x, wr.y - y);
-    return new THREE.Vector3(x, y, dl < dr ? wl.z : wr.z);
+    return hl && hr ? hl.add(hr).multiplyScalar(0.5) : null;
+  };
+  const wrists = (i: number) => [U(MP.wrL, i), U(MP.wrR, i)] as const;
+  /** Profundidad automática: la de la muñeca más cercana en el plano de la imagen. */
+  const autoDepth = (i: number, x: number, y: number) => {
+    const [wl, wr] = wrists(i);
+    return Math.hypot(wl.x - x, wl.y - y) < Math.hypot(wr.x - x, wr.y - y) ? wl.z : wr.z;
+  };
+  const imageToLocal = (i: number, u: number, v: number, depth?: number): [number, number, number] | null => {
+    const hp = hipPx(i);
+    if (!hp || !Number.isFinite(mpp[i]!)) return null;
+    const x = (u * W - hp.x) * mpp[i]!;
+    const y = -(v * H - hp.y) * mpp[i]! - floor[i]! + jump[i]!;
+    return [x, y, depth ?? autoDepth(i, x, y)];
+  };
+  const localToImage = (i: number, p: readonly number[]) => {
+    const hp = hipPx(i);
+    if (!hp || !Number.isFinite(mpp[i]!)) return null;
+    return { x: (p[0]! / mpp[i]! + hp.x) / W, y: (hp.y - (p[1]! + floor[i]! - jump[i]!) / mpp[i]!) / H };
+  };
+  const det: Track = cap.frames.map((f, i) => {
+    const p = f.ball ? imageToLocal(i, f.ball[0], f.ball[1]) : null;
+    return p ? new THREE.Vector3(...p) : null;
   });
-  const ballSeen = ballRaw.filter(Boolean).length;
-  const ballFilled = fillGaps(ballRaw, Math.round(cap.fps * 0.2));
-  const ballM: (THREE.Vector3 | null)[] = ballFilled.map((b, i) => {
+  const ballSeen = det.filter(Boolean).length;
+  const detFilled = fillGaps(det, Math.round(cap.fps * 0.2));
+  // Mediana de 3 para quitar detecciones sueltas sin redondear los botes.
+  const detM = detFilled.map((b, i) => {
     if (!b) return null;
-    // Mediana de 3 para quitar detecciones sueltas sin redondear los botes (salvo keyframes: mandan).
-    if (b2.pos[i]?.source === 'key') return b;
-    const near = [ballFilled[i - 1], b, ballFilled[i + 1]].filter(Boolean) as THREE.Vector3[];
+    const near = [detFilled[i - 1], b, detFilled[i + 1]].filter(Boolean) as THREE.Vector3[];
     return near.length === 3 ? median(near, 1)[1]! : b;
+  });
+  // Keyframes en 3D: entre dos a menos de 0,75 s se interpola (sustituye a la detección); uno suelto
+  // corrige la detección de alrededor y la corrección se desvanece en 0,15 s.
+  const keys = [...(cap.ballKeys ?? [])]
+    .sort((a, b) => a.f - b.f)
+    .map((k) => ({ ...k, v: new THREE.Vector3(...(k.p ?? imageToLocal(k.f, k.x, k.y) ?? [0, 1, 0])) }));
+  const span = Math.round(cap.fps * 0.75);
+  const fade = Math.max(2, Math.round(cap.fps * 0.15));
+  const ball2d: (Ball2D | null)[] = [];
+  const handO: { l: number; r: number; w: number }[] = [];
+  const ballM: (THREE.Vector3 | null)[] = detM.map((d, i) => {
+    const inf = keyInfluence(keys, i, span, fade);
+    let p: THREE.Vector3 | null = d ? d.clone() : null;
+    let source: Ball2D['source'] = 'det';
+    if (inf.mode === 'replace') {
+      p = new THREE.Vector3();
+      for (const { k, w } of inf.ks) p.addScaledVector(k.v, w);
+      source = inf.ks.length === 1 ? 'key' : 'interp';
+    } else if (inf.mode === 'fade') {
+      source = 'fix';
+      if (p) for (const { k, w } of inf.ks) p.addScaledVector(k.v.clone().sub(detM[k.f] ?? k.v), w);
+      else {
+        const best = inf.ks.reduce((a, b) => (b.w > a.w ? b : a));
+        if (best.w > 0.3) p = best.k.v.clone();
+      }
+    }
+    const im = p ? localToImage(i, [p.x, p.y, p.z]) : null;
+    ball2d.push(p && im ? { ...im, source } : null);
+    // Mano forzada: media de los keyframes con mano elegida, con su peso.
+    let l = 0;
+    let r = 0;
+    let w = 0;
+    for (const { k, w: kw } of inf.ks) {
+      if (k.hand === 'auto') continue;
+      l += (k.hand === 'L' ? 1 : 0) * kw;
+      r += (k.hand === 'R' ? 1 : 0) * kw;
+      w += kw;
+    }
+    handO.push(w > 0 ? { l: l / w, r: r / w, w: Math.min(1, w) } : { l: 0, r: 0, w: 0 });
+    return p;
   });
   // Peso "en la mano": 1 a < 18 cm de la muñeca, 0 desde 32 cm. Si no se ve, la última mano que lo tuvo.
   let lastSide: 0 | 1 = 1;
@@ -460,19 +498,24 @@ export function bakeCapture(cap: Capture, clean = true): Baked {
       holdR.push(lastSide === 1 ? 1 : 0);
       return;
     }
-    const dl = b.distanceTo(P(MP.wrL, i));
-    const dr = b.distanceTo(P(MP.wrR, i));
+    const [wl, wr] = wrists(i);
+    const dl = b.distanceTo(wl);
+    const dr = b.distanceTo(wr);
     const hold = (d: number) => 1 - THREE.MathUtils.smoothstep(d, 0.18, 0.32);
     holdL.push(hold(dl));
     holdR.push(hold(dr));
     if (Math.min(dl, dr) < 0.32) lastSide = dl < dr ? 0 : 1;
   });
   // Mano forzada por los keyframes, encima.
-  const wL = gauss(holdL, 1.5).map((v, i) => v + (b2.hand[i]!.l - v) * b2.hand[i]!.w);
-  const wR = gauss(holdR, 1.5).map((v, i) => v + (b2.hand[i]!.r - v) * b2.hand[i]!.w);
+  const wL = gauss(holdL, 1.5).map((v, i) => v + (handO[i]!.l - v) * handO[i]!.w);
+  const wR = gauss(holdR, 1.5).map((v, i) => v + (handO[i]!.r - v) * handO[i]!.w);
+  const localToWorld = (i: number, p: readonly number[]): [number, number, number] => [p[0]! + rx[i]!, p[1]!, p[2]! + rz[i]!];
+  const worldToLocal = (i: number, w: readonly number[]): [number, number, number] => [w[0]! - rx[i]!, w[1]!, w[2]! - rz[i]!];
   const ballWorld = ballM.map((b, i) => {
-    const q = b ?? (wL[i]! > wR[i]! ? P(MP.wrL, i) : P(MP.wrR, i));
-    return [q.x + rx[i]!, Math.max(BALL_R, q.y - floor[i]! + jump[i]!), q.z + rz[i]!];
+    const q = b ?? (wL[i]! > wR[i]! ? wrists(i)[0] : wrists(i)[1]);
+    const w = localToWorld(i, [q.x, q.y, q.z]);
+    w[1] = Math.max(BALL_R, w[1]);
+    return w;
   });
 
   // --- 6. Retargeting ---
@@ -519,7 +562,15 @@ export function bakeCapture(cap: Capture, clean = true): Baked {
     visibility,
     skeleton,
     ballMeters: ballM.map((b, i) => (b ? ballWorld[i]! : null)),
-    ball2d: b2.pos,
+    ball2d,
+    ballLocal: ballM.map((b) => (b ? [b.x, b.y, b.z] : null)),
+    f0,
+    range: cap.range,
+    scale: k,
+    imageToLocal,
+    localToImage,
+    localToWorld,
+    worldToLocal,
     contact: { l: contactW[0]!, r: contactW[1]! },
     stats: {
       legLen,
@@ -538,9 +589,9 @@ export function landmarksJson(cap: Capture, baked: Baked) {
     version: 1,
     name: cap.name,
     fps: cap.fps,
-    frameCount: cap.frames.length,
-    duration: +(cap.frames.length / cap.fps).toFixed(4),
-    videoRange: cap.range,
+    frameCount: baked.world.length,
+    duration: +(baked.world.length / cap.fps).toFixed(4),
+    videoRange: baked.range,
     units: 'm',
     axes: 'y hacia arriba, x hacia la derecha de la cámara, z hacia la cámara (giro de 180° sobre X de los ejes de MediaPipe); suelo en y = 0 (lo toca el punto más bajo del pie apoyado); x/z = 0 en la cadera del primer fotograma',
     cleaning: {

@@ -51,6 +51,13 @@
       body.editing #overlay { pointer-events: auto; cursor: crosshair; }
       body.editing .pane:first-child { outline: 2px solid #6fe3a0; outline-offset: -2px; }
       .range-bar .key { position: absolute; top: -4px; width: 8px; height: 8px; margin-left: -4px; background: #6fe3a0; transform: rotate(45deg); cursor: pointer; border: 1px solid #0f1520; }
+      .xyz { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--dim); }
+      .xyz input { width: 62px; font: inherit; font-size: 12px; padding: 5px; background: #0f1520; color: var(--ui); border: 1px solid var(--line); border-radius: 4px; }
+      .xyz input:disabled { opacity: 0.4; }
+      #dup-form { display: none; gap: 6px; }
+      #dup-form.show { display: grid; }
+      #dup-form input { font: inherit; font-size: 12px; padding: 6px; background: #0f1520; color: var(--ui); border: 1px solid var(--line); border-radius: 4px; }
+      .range-bar .trim-out { position: absolute; top: -3px; bottom: -3px; background: #0f1520d9; pointer-events: none; }
       select { font: inherit; font-size: 12px; color: var(--ui); background: #24314a; border: 1px solid var(--line); border-radius: 4px; padding: 5px 6px; }
       #view { width: 100%; height: 100%; display: block; image-rendering: pixelated; touch-action: none; }
       #info { position: absolute; bottom: 8px; left: 8px; font-size: 12px; color: var(--accent); pointer-events: none; }
@@ -93,9 +100,16 @@
       <ul id="library"></ul>
       <div class="new">
         <label class="file">＋ Abrir vídeo…<input id="file" type="file" accept="video/mp4,video/quicktime,video/webm,.mov,.m4v" /></label>
+        <button type="button" id="dup" disabled title="Copia esta captura (vídeo, análisis, keyframes y recorte) con otro nombre para sacar otro clip de otra sección">⧉ Duplicar captura</button>
+        <form id="dup-form">
+          <small>Nombre de la copia</small>
+          <input id="dup-name" required pattern="[a-z0-9][a-z0-9_\-]{0,40}" autocomplete="off" />
+          <button class="primary" type="submit">Duplicar</button>
+          <button type="button" id="dup-cancel">Cancelar</button>
+        </form>
         <form id="new-form">
           <small>Nombre del clip (minúsculas, sin espacios)</small>
-          <input id="new-name" required pattern="[a-z0-9][a-z0-9_-]{0,40}" autocomplete="off" />
+          <input id="new-name" required pattern="[a-z0-9][a-z0-9_\-]{0,40}" autocomplete="off" />
           <button class="primary" type="submit">Crear captura</button>
           <button type="button" id="new-cancel">Cancelar</button>
         </form>
@@ -123,11 +137,11 @@
         <input id="scrub" type="range" min="0" max="10000" value="0" step="1" aria-label="Tiempo" />
         <span id="time">0,00 / 0,00 s</span>
       </div>
-      <div class="range-bar" id="range-bar" title="Amarillo: tramo a analizar · verde: tramo analizado · rombos: keyframes del balón"><div id="bar-range"></div><div id="bar-done" class="analyzed"></div></div>
+      <div class="range-bar" id="range-bar" title="Amarillo: clip (inicio–fin) · verde: analizado · rombos: keyframes del balón"><div id="bar-range"></div><div id="bar-done" class="analyzed"></div></div>
       <div class="row">
-        <button type="button" id="mark-in" title="Tecla I">⇤ Inicio aquí</button>
-        <button type="button" id="mark-out" title="Tecla O">Fin aquí ⇥</button>
-        <button type="button" id="mark-reset">Todo el vídeo</button>
+        <button type="button" id="mark-in" title="Inicio del clip en este momento (tecla I). Si está dentro de lo analizado, recorta al momento">⇤ Inicio aquí</button>
+        <button type="button" id="mark-out" title="Fin del clip en este momento (tecla O)">Fin aquí ⇥</button>
+        <button type="button" id="mark-reset" title="Quita el recorte (todo lo analizado; sin captura, todo el vídeo)">Sin recorte</button>
         <small id="range-text"></small>
         <span class="sep"></span>
         <button type="button" class="primary" id="analyze">ANALIZAR</button>
@@ -152,6 +166,11 @@
           <option value="R">Mano: derecha</option>
           <option value="free">Balón suelto</option>
         </select>
+        <span class="xyz" title="Posición del balón en el keyframe, en metros: X e Z respecto a la cadera (X derecha de la cámara, Z hacia la cámara), Y = altura sobre el suelo. También se mueve con las flechas de la vista 3D">
+          X <input id="key-x" type="number" step="0.01" />
+          Y <input id="key-y" type="number" step="0.01" min="0" />
+          Z <input id="key-z" type="number" step="0.01" /> m
+        </span>
         <button type="button" id="key-del" title="Tecla Supr">Borrar key</button>
         <small id="key-text"></small>
       </div>
