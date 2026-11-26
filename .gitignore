@@ -8,3 +8,4 @@ tools/mocap/bvh/
 tools/video-mocap/data/*/video.*
 tools/video-mocap/models/
 .playwright-mcp/
+tools/video-mocap/data/*/landmarks.json

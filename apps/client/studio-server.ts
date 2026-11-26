@@ -3,7 +3,8 @@
  * publicada). Guarda en disco lo que hace el estudio en el navegador:
  *
  *   tools/video-mocap/data/<nombre>/video.<ext>     vídeo original (fuera de git)
- *   tools/video-mocap/data/<nombre>/capture.json    análisis de MediaPipe + balón + exageración
+ *   tools/video-mocap/data/<nombre>/capture.json    análisis de MediaPipe + balón + keyframes + exageración
+ *   tools/video-mocap/data/<nombre>/landmarks.json  landmarks limpios exportados (fuera de git)
  *   apps/client/src/content/anims/<nombre>.json     clip horneado que lee el juego
  */
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -126,6 +127,13 @@ export function studioServer(): Plugin {
               req.on('error', fail);
             });
             return send(res, 200, { video: fsUrl(target) });
+          }
+          if (kind === 'landmarks' && req.method === 'PUT') {
+            const body = await readBody(req);
+            JSON.parse(body);
+            mkdirSync(dir, { recursive: true });
+            writeFileSync(join(dir, 'landmarks.json'), body);
+            return send(res, 200, { ok: true, path: `tools/video-mocap/data/${name}/landmarks.json` });
           }
           if (kind === 'clip' && req.method === 'PUT') {
             const body = await readBody(req);

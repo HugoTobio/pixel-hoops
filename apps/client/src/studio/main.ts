@@ -11,7 +11,7 @@ import { buildCourt } from '../render/court';
 import { createPlayerModel } from '../render/player-model';
 import { faceted, outlineMaterial, toonMaterial } from '../render/toon';
 import { detectBall } from '../mocap/ball-detect';
-import { bakeCapture, DEFAULT_EXAGGERATE, MP, SKELETON_BONES, type Baked, type Capture, type CaptureFrame } from '../mocap/capture';
+import { bakeCapture, DEFAULT_EXAGGERATE, landmarksJson, MP, SKELETON_BONES, type Baked, type BallKey, type Capture, type CaptureFrame, type HandOverride } from '../mocap/capture';
 import { MocapClip } from '../mocap/clip';
 
 declare const __MP_WASM__: string;
@@ -97,11 +97,18 @@ const state = {
   analyzing: false,
   cancel: false,
   dirty: false,
+  editing: false,
 };
 const sample = MocapClip.emptySample();
+let lastOverlayFrame = -2;
 const vA = new THREE.Vector3();
 const vB = new THREE.Vector3();
 const vC = new THREE.Vector3();
+const footL = new THREE.Vector3();
+const footR = new THREE.Vector3();
+const offset = new THREE.Vector3();
+/** Dónde estaba el jugador en el fotograma anterior (la cámara le sigue). */
+const lastBody = new THREE.Vector3();
 
 // --- Biblioteca ----------------------------------------------------------------------------
 interface Item {
@@ -145,6 +152,9 @@ async function open(name: string) {
   state.baked = state.bakedRaw = null;
   state.mocap = null;
   state.dirty = false;
+  setEditing(false);
+  renderKeys();
+  $<HTMLButtonElement>('#export').disabled = true;
   history.replaceState(null, '', `?c=${encodeURIComponent(name)}`);
   await refreshLibrary();
   status(`Cargando ${name}…`);
@@ -172,11 +182,38 @@ function loadCapture(cap: Capture) {
   cap.exaggerate = { ...DEFAULT_EXAGGERATE, ...cap.exaggerate };
   state.capture = cap;
   state.range = [...cap.range];
+  cap.ballKeys ??= [];
+  cap.feetLock ??= true;
+  $('#feet').setAttribute('aria-pressed', String(cap.feetLock));
+  rebake();
+  setSliders(cap.exaggerate.jump, cap.exaggerate.pose);
+  $<HTMLButtonElement>('#save').disabled = false;
+  $<HTMLButtonElement>('#export').disabled = false;
+}
+
+/** Vuelve a hornear tras cambiar keyframes o pies fijos (rápido: ~decenas de ms). */
+function rebake() {
+  const cap = state.capture;
+  if (!cap) return;
+  cap.ballKeys!.sort((a, b) => a.f - b.f);
   state.baked = bakeCapture(cap, true);
   state.bakedRaw = bakeCapture(cap, false);
   pickClip();
-  setSliders(cap.exaggerate.jump, cap.exaggerate.pose);
-  $<HTMLButtonElement>('#save').disabled = false;
+  renderKeys();
+  lastOverlayFrame = -2;
+}
+let rebakeQueued = false;
+function queueRebake() {
+  if (rebakeQueued) return;
+  rebakeQueued = true;
+  requestAnimationFrame(() => {
+    rebakeQueued = false;
+    rebake();
+  });
+}
+function markDirty(msg = 'Cambios sin guardar: pulsa GUARDAR EN EL JUEGO.') {
+  state.dirty = true;
+  status(msg);
 }
 
 function pickClip() {
@@ -455,6 +492,156 @@ async function save() {
 }
 $('#save').onclick = () => void save();
 
+/** Landmarks limpios (antes del retargeting): se guardan junto a la captura y se descargan. */
+async function exportLandmarks() {
+  if (!state.capture || !state.baked) return;
+  const json = JSON.stringify(landmarksJson(state.capture, state.baked));
+  try {
+    const r = await api<{ path: string }>(`landmarks/${state.name}`, { method: 'PUT', body: json });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+    a.download = `${state.name}-landmarks.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    status(`Landmarks exportados: ${r.path} (${fmt(json.length / 1e6, 1)} MB, ${state.capture.frames.length} fotogramas × 33 puntos).`, 'ok');
+  } catch (err) {
+    status(`No se pudieron exportar: ${(err as Error).message}`, 'bad');
+  }
+}
+$('#export').onclick = () => void exportLandmarks();
+
+// --- Pies fijos ----------------------------------------------------------------------------
+$('#feet').onclick = () => {
+  if (!state.capture) return;
+  state.capture.feetLock = !state.capture.feetLock;
+  $('#feet').setAttribute('aria-pressed', String(state.capture.feetLock));
+  rebake();
+  markDirty(state.capture.feetLock ? 'Pies fijos activados (sin guardar).' : 'Pies fijos desactivados (sin guardar).');
+};
+
+// --- Keyframes del balón -------------------------------------------------------------------
+const handSel = $<HTMLSelectElement>('#key-hand');
+/** Fotograma de la captura que se está viendo (o −1 si fuera del tramo analizado). */
+function currentFrame(): number {
+  const cap = state.capture;
+  if (!cap) return -1;
+  const tc = video.currentTime - cap.range[0];
+  if (tc < -0.02 || tc > cap.frames.length / cap.fps + 0.02) return -1;
+  return Math.max(0, Math.min(cap.frames.length - 1, Math.round(tc * cap.fps)));
+}
+const keyAt = (f: number) => state.capture?.ballKeys?.find((k) => k.f === f) ?? null;
+function seekFrame(f: number) {
+  const cap = state.capture;
+  if (!cap) return;
+  setPlaying(false);
+  seek(cap.range[0] + f / cap.fps + 0.0005);
+}
+function renderKeys() {
+  const bar = $('#range-bar');
+  bar.querySelectorAll('.key').forEach((e) => e.remove());
+  const cap = state.capture;
+  const d = video.duration || 0;
+  if (!cap || !d) return;
+  for (const k of cap.ballKeys ?? []) {
+    const el = document.createElement('div');
+    el.className = 'key';
+    el.style.left = `${((cap.range[0] + k.f / cap.fps) / d) * 100}%`;
+    el.title = `Keyframe del balón · fotograma ${k.f + 1}`;
+    el.onclick = () => seekFrame(k.f);
+    bar.append(el);
+  }
+  updateKeyUi();
+}
+function updateKeyUi() {
+  const n = state.capture?.ballKeys?.length ?? 0;
+  const k = keyAt(currentFrame());
+  $('#key-text').textContent = `${n} keyframe${n === 1 ? '' : 's'}${k ? ` · este fotograma tiene uno` : ''}`;
+  handSel.value = k?.hand ?? 'auto';
+  $<HTMLButtonElement>('#key-del').disabled = !k;
+}
+/** Pone (o mueve) el keyframe del fotograma actual en la posición de imagen dada (0–1). */
+function setKey(x: number, y: number) {
+  const cap = state.capture;
+  const f = currentFrame();
+  if (!cap || f < 0) return;
+  const k = keyAt(f);
+  if (k) Object.assign(k, { x, y });
+  else cap.ballKeys!.push({ f, x, y, hand: handSel.value as HandOverride } satisfies BallKey);
+  queueRebake();
+  markDirty('Balón corregido (sin guardar).');
+}
+function jumpKey(dir: 1 | -1) {
+  const keys = state.capture?.ballKeys ?? [];
+  const f = currentFrame();
+  const k = dir > 0 ? keys.find((q) => q.f > f) : [...keys].reverse().find((q) => q.f < f);
+  if (k) seekFrame(k.f);
+}
+function deleteKey() {
+  const cap = state.capture;
+  const k = keyAt(currentFrame());
+  if (!cap || !k) return;
+  cap.ballKeys = cap.ballKeys!.filter((q) => q !== k);
+  rebake();
+  markDirty('Keyframe borrado (sin guardar).');
+}
+function setEditing(on: boolean) {
+  state.editing = on && !!state.capture;
+  document.body.classList.toggle('editing', state.editing);
+  $('#edit').setAttribute('aria-pressed', String(state.editing));
+  if (state.editing) {
+    setPlaying(false);
+    status('Editar balón: haz clic o arrastra sobre el vídeo donde está el balón en este fotograma. ←/→ para moverte.');
+  }
+}
+$('#edit').onclick = () => setEditing(!state.editing);
+$('#key-prev').onclick = () => jumpKey(-1);
+$('#key-next').onclick = () => jumpKey(1);
+$('#key-del').onclick = deleteKey;
+handSel.onchange = () => {
+  const cap = state.capture;
+  const f = currentFrame();
+  if (!cap || f < 0) return;
+  const k = keyAt(f);
+  if (k) k.hand = handSel.value as HandOverride;
+  else {
+    // Sin keyframe aquí: se crea uno donde está ahora el balón (corregido o detectado).
+    const b = state.baked?.ball2d[f];
+    if (!b) {
+      status('Primero coloca el balón en este fotograma (Editar balón y clic sobre el vídeo).', 'bad');
+      handSel.value = 'auto';
+      return;
+    }
+    cap.ballKeys!.push({ f, x: b.x, y: b.y, hand: handSel.value as HandOverride });
+  }
+  rebake();
+  markDirty('Mano del keyframe cambiada (sin guardar).');
+};
+/** Posición en la imagen (0–1) de un evento de ratón sobre el vídeo. */
+function videoPoint(e: PointerEvent): { x: number; y: number } | null {
+  const r = overlay.getBoundingClientRect();
+  const s = Math.min(r.width / video.videoWidth, r.height / video.videoHeight);
+  const w = video.videoWidth * s;
+  const h = video.videoHeight * s;
+  const x = (e.clientX - r.left - (r.width - w) / 2) / w;
+  const y = (e.clientY - r.top - (r.height - h) / 2) / h;
+  return x >= 0 && x <= 1 && y >= 0 && y <= 1 ? { x, y } : null;
+}
+let dragging = false;
+overlay.addEventListener('pointerdown', (e) => {
+  if (!state.editing) return;
+  const p = videoPoint(e);
+  if (!p) return;
+  dragging = true;
+  overlay.setPointerCapture(e.pointerId);
+  setKey(p.x, p.y);
+});
+overlay.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const p = videoPoint(e);
+  if (p) setKey(p.x, p.y);
+});
+overlay.addEventListener('pointerup', () => (dragging = false));
+
 // --- Exageración ---------------------------------------------------------------------------
 const jumpIn = $<HTMLInputElement>('#ex-jump');
 const poseIn = $<HTMLInputElement>('#ex-pose');
@@ -576,6 +763,11 @@ addEventListener('keydown', (e) => {
     seek(video.currentTime + (e.code === 'ArrowRight' ? 1 : -1) / fps);
   } else if (e.code === 'KeyI') markIn();
   else if (e.code === 'KeyO') markOut();
+  else if (e.code === 'KeyB') setEditing(!state.editing);
+  else if (e.code === 'Comma') jumpKey(-1);
+  else if (e.code === 'Period') jumpKey(1);
+  else if (e.code === 'Delete' || e.code === 'Backspace') deleteKey();
+  else if (e.code === 'Escape') setEditing(false);
 });
 
 // --- Cámaras -------------------------------------------------------------------------------
@@ -609,7 +801,7 @@ new ResizeObserver(resize).observe(video);
 
 // --- Dibujo --------------------------------------------------------------------------------
 /** Esqueleto 2D y balón detectado encima del vídeo (para ver qué ha entendido MediaPipe). */
-function drawOverlay(f: CaptureFrame | null) {
+function drawOverlay(f: CaptureFrame | null, i = -1) {
   const ctx = overlay.getContext('2d')!;
   ctx.clearRect(0, 0, overlay.width, overlay.height);
   if (!f || !state.overlay || !video.videoWidth) return;
@@ -633,13 +825,30 @@ function drawOverlay(f: CaptureFrame | null) {
     }
     ctx.stroke();
   }
+  // Amarillo discontinuo: lo detectado. Verde: corregido a mano (relleno si es un keyframe).
+  const rad = Math.max(6 * devicePixelRatio, (f.ball?.[2] ?? 0.015) * w * 1.15);
   if (f.ball) {
     const [x, y] = P(f.ball[0], f.ball[1]);
     ctx.strokeStyle = '#f2c94c';
+    ctx.lineWidth = 2 * devicePixelRatio;
+    ctx.setLineDash([5 * devicePixelRatio, 4 * devicePixelRatio]);
+    ctx.beginPath();
+    ctx.arc(x, y, rad, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  const fixed = i >= 0 ? state.baked?.ball2d[i] : null;
+  if (fixed && fixed.source !== 'det') {
+    const [x, y] = P(fixed.x, fixed.y);
+    ctx.strokeStyle = '#6fe3a0';
     ctx.lineWidth = 3 * devicePixelRatio;
     ctx.beginPath();
-    ctx.arc(x, y, Math.max(6, f.ball[2] * w * 1.15), 0, Math.PI * 2);
+    ctx.arc(x, y, rad, 0, Math.PI * 2);
     ctx.stroke();
+    if (fixed.source === 'key') {
+      ctx.fillStyle = '#6fe3a066';
+      ctx.fill();
+    }
   }
 }
 
@@ -656,7 +865,25 @@ function update3d(tc: number, f: number) {
   $('#tag3d').textContent = state.skeleton ? 'RIG DEL JUEGO  ·  ESQUELETO MEDIAPIPE' : 'RIG DEL JUEGO';
 
   const m = state.mocap!.sample(tc, sample);
-  player.applyPose(m.pose, m.yaw, m.lift * RIG);
+  // Pies clavados (mundo) = posición del jugador + objetivo del clip.
+  footL.copy(m.footL).multiplyScalar(RIG).add(player.root.position);
+  footR.copy(m.footR).multiplyScalar(RIG).add(player.root.position);
+  player.applyPose(m.pose, m.yaw, m.lift * RIG, {
+    offset: offset.copy(m.root).multiplyScalar(RIG),
+    footL,
+    footR,
+    footWL: m.footWL,
+    footWR: m.footWR,
+  });
+  // La cámara acompaña al jugador cuando se desplaza (sin perder el ángulo que haya puesto el usuario).
+  const body = vB.copy(offset).add(player.root.position).setY(0);
+  const move = vC.subVectors(body, lastBody);
+  if (move.lengthSq() < 4) {
+    camera.position.add(move);
+    controls.target.add(move);
+  }
+  lastBody.copy(body);
+  skeleton.position.set(0.75, 0, 0);
 
   // Balón: suelto donde se vio en el vídeo; en la mano, pegado a la palma del rig.
   const free = vA.copy(m.ball).multiplyScalar(RIG).add(player.root.position);
@@ -684,12 +911,13 @@ function update3d(tc: number, f: number) {
   skelBall.visible = !!bm;
   if (bm) skelBall.position.set(bm[0]!, bm[1]!, bm[2]!);
 
-  const fr = state.capture!.frames[f]!;
+  const src = baked!.ball2d[f]?.source;
+  const seen = { det: 'visto', key: 'keyframe', interp: 'interpolado', fix: 'corregido' }[src ?? 'det'];
   const where = hold > 0.5 ? (m.holdL > m.holdR ? 'mano izq.' : 'mano der.') : 'suelto';
-  $('#info').textContent = `fotograma ${f + 1}/${state.capture!.frames.length} · balón ${fr.ball ? 'visto' : 'no visto'} (${where}) · salto ${Math.round(m.lift * RIG * 100)} cm`;
+  const feet = [m.footWL > 0.5 ? 'izq.' : '', m.footWR > 0.5 ? 'der.' : ''].filter(Boolean).join(' + ') || 'ninguno';
+  $('#info').textContent = `fotograma ${f + 1}/${state.capture!.frames.length} · balón ${src ? seen : 'no visto'} (${where}) · salto ${Math.round(m.lift * RIG * 100)} cm · apoyo: ${feet}`;
 }
 
-let lastOverlayFrame = -2;
 function frame() {
   const d = video.duration || 0;
   const t = video.currentTime;
@@ -701,7 +929,10 @@ function frame() {
     const tc = Math.max(0, Math.min(cap.frames.length / cap.fps - 1e-3, t - cap.range[0]));
     const f = Math.min(cap.frames.length - 1, Math.round(tc * cap.fps));
     const inside = t >= cap.range[0] - 0.02 && t <= cap.range[1] + 0.02;
-    if (f !== lastOverlayFrame || !inside) drawOverlay(inside ? cap.frames[f]! : null);
+    if (f !== lastOverlayFrame || !inside) {
+      drawOverlay(inside ? cap.frames[f]! : null, f);
+      updateKeyUi();
+    }
     lastOverlayFrame = inside ? f : -2;
     update3d(tc, f);
   } else if (!state.analyzing) {
@@ -723,4 +954,4 @@ await refreshLibrary();
 const want = new URLSearchParams(location.search).get('c');
 if (want && library.some((i) => i.name === want)) await open(want);
 else if (library[0]) await open(library[0].name);
-if (import.meta.env.DEV) Object.assign(window, { __studio: { state, analyze, save, seek, setPlaying } });
+if (import.meta.env.DEV) Object.assign(window, { __studio: { state, analyze, save, seek, setPlaying, seekFrame, setKey, exportLandmarks, setEditing } });

@@ -52,7 +52,35 @@ Todo en local y en el navegador (MediaPipe Pose para web; sin Python):
    naranjas y saltos imposibles). Se guarda en `data/<nombre>/capture.json`. Mientras analiza se puede seguir
    tocando el reproductor: el análisis usa su propia copia del vídeo.
 4. Ajustar **Salto** (×0–4) y **Movimiento** (×0–2,5: cuánto se aparta cada articulación de la postura de reposo).
-5. **GUARDAR EN EL JUEGO** → `apps/client/src/content/anims/<nombre>.json` (con la exageración elegida).
+5. **Pies fijos** (activado por defecto): detecta cuándo cada pie está apoyado y lo clava en el suelo; el cuerpo
+   se desplaza sobre él (desplazamiento de la raíz). En el rig se resuelve con cinemática inversa de dos huesos.
+6. **Corregir el balón** con keyframes: **Editar balón** (tecla B) y clic/arrastrar sobre el vídeo donde está el
+   balón en ese fotograma. Un keyframe manda en su fotograma; entre dos keyframes a menos de 0,75 s se interpola
+   (sustituye a la detección); un keyframe suelto corrige la detección de alrededor y se desvanece en 0,15 s.
+   Cada keyframe puede forzar la mano (automática / izquierda / derecha / suelto). `,` `.` saltan entre
+   keyframes y Supr borra el del fotograma actual. Sobre el vídeo: amarillo discontinuo = detectado, verde =
+   corregido (relleno = keyframe). Los keyframes se guardan en `capture.json` (no hace falta volver a analizar).
+7. **GUARDAR EN EL JUEGO** → `apps/client/src/content/anims/<nombre>.json` (con la exageración elegida).
+8. **EXPORTAR LANDMARKS** → `data/<nombre>/landmarks.json` (y se descarga). Ver formato abajo.
+
+### Formato de `landmarks.json` (landmarks limpios, antes del retargeting)
+
+```jsonc
+{
+  "format": "pixel-hoops/mediapipe-landmarks", "version": 1, "name": "pivot",
+  "fps": 60, "frameCount": 291, "duration": 4.85, "videoRange": [0, 4.85], "units": "m",
+  "axes": "y arriba, x a la derecha de la cámara, z hacia la cámara; suelo en y = 0; x/z = 0 en la cadera del 1er fotograma",
+  "cleaning": { "minVisibility": 0.5, "medianFrames": 7, "gaussSigmaFrames": 2.2, "feetLocked": true },
+  "points": ["nose", "left_eye_inner", …, "right_foot_index"],   // los 33 de MediaPipe, en su orden
+  "frames": [ { "t": 0, "p": [[x, y, z, visibility], … 33] }, … ],
+  "ball": [[x, y, z] | null, …]                                  // extra: centro del balón, mismos ejes
+}
+```
+
+- Coordenadas *world* de MediaPipe (metros) pasadas a ejes con Y arriba (giro de 180° sobre X, sin espejo).
+- Limpieza: puntos con visibilidad < 0,5 interpolados, mediana de 7 fotogramas y gaussiano σ = 2,2 sin desfase.
+  La `visibility` es la original de MediaPipe (así se sabe qué puntos se han rellenado).
+- Incluye el salto (medido en la imagen) y, con pies fijos, el desplazamiento por la pista y los pies clavados.
 
 La "detección sobre vídeo" dibuja el esqueleto y un círculo amarillo donde se ha visto el balón: si el círculo
 se va a otra cosa, ese tramo saldrá mal. El modelo (`models/pose_landmarker_heavy.task`, 30 MB) se descarga solo
@@ -66,4 +94,3 @@ el juego), `src/mocap/retarget.ts` (común con los BVH de CMU).
 ## Pendiente
 
 1. Meter el pivote en el juego y decidir cuándo se ejecuta (¿botón nuevo o al cambiar bruscamente de dirección con balón?).
-2. Si un vídeo da problemas con el balón: corregirlo a mano en el estudio (aún no existe).

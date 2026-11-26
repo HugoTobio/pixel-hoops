@@ -111,6 +111,16 @@ const GESTURE = {
   dunkR: qe(-2.7, 0, -0.12),
 };
 
+export interface PoseExtra {
+  /** Desplazamiento del cuerpo sobre el suelo respecto a root (metros; se usan x y z). */
+  offset?: THREE.Vector3;
+  /** Pies: dónde deben quedar (mundo) y cuánto (0–1). */
+  footL?: THREE.Vector3;
+  footR?: THREE.Vector3;
+  footWL?: number;
+  footWR?: number;
+}
+
 export interface PlayerModel {
   root: THREE.Group;
   /** Altura real del jugador en metros. */
@@ -119,8 +129,10 @@ export interface PlayerModel {
   /**
    * Pone una pose concreta (p. ej. un clip de mocap reproducido desde fuera), sin las capas de update().
    * Apoya el pie más bajo en el suelo y luego suma `lift` (salto, en metros).
+   * Opcional: desplazamiento de la raíz (metros, en el suelo) y pies clavados en puntos del mundo
+   * (cinemática inversa de dos huesos en cada pierna, mezclada con su peso).
    */
-  applyPose(src: PoseBuf, facing: number, lift?: number): void;
+  applyPose(src: PoseBuf, facing: number, lift?: number, extra?: PoseExtra): void;
   /** Posición (mundo) de las palmas izquierda y derecha. */
   palms(outL: THREE.Vector3, outR: THREE.Vector3): void;
   /** Posición del balón cuando este jugador lo tiene (mundo). */
@@ -252,6 +264,43 @@ export function createPlayerModel(look: PlayerLook, heightM: number, ringColor: 
   const v1 = new THREE.Vector3();
   const v2 = new THREE.Vector3();
 
+  // --- Cinemática inversa de dos huesos (cadera → rodilla → suela) ---
+  const ik = Array.from({ length: 8 }, () => new THREE.Vector3());
+  const qa = new THREE.Quaternion();
+  const qb = new THREE.Quaternion();
+  /** Gira `bone` (en el mundo) lo justo para que la dirección `from` pase a ser `to`. */
+  const turnBone = (bone: THREE.Object3D, from: THREE.Vector3, to: THREE.Vector3) => {
+    qa.setFromUnitVectors(from.normalize(), to.normalize());
+    bone.getWorldQuaternion(qb);
+    qb.premultiply(qa);
+    bone.parent!.getWorldQuaternion(qa);
+    bone.quaternion.copy(qa.invert().multiply(qb));
+    bone.updateMatrixWorld(true);
+  };
+  /** Lleva la suela de la pierna hacia `target` (mundo) con peso w, conservando hacia dónde dobla la rodilla. */
+  const solveLeg = (leg: { hip: THREE.Object3D; knee: THREE.Object3D; sole: THREE.Object3D }, target: THREE.Vector3, w: number) => {
+    const [H, K, S, T, dir, pole, nk, tmp] = ik as [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3];
+    leg.hip.getWorldPosition(H);
+    leg.knee.getWorldPosition(K);
+    leg.sole.getWorldPosition(S);
+    const l1 = H.distanceTo(K);
+    const l2 = K.distanceTo(S);
+    T.copy(S).lerp(target, Math.min(1, w));
+    dir.subVectors(T, H);
+    const d = THREE.MathUtils.clamp(dir.length(), Math.abs(l1 - l2) + 1e-3, (l1 + l2) * 0.999);
+    dir.normalize();
+    pole.subVectors(K, H).addScaledVector(dir, -tmp.subVectors(K, H).dot(dir));
+    if (pole.lengthSq() < 1e-8) pole.set(Math.sin(pivot.rotation.y), 0, Math.cos(pivot.rotation.y));
+    pole.normalize();
+    const a = (l1 * l1 - l2 * l2 + d * d) / (2 * d);
+    const h = Math.sqrt(Math.max(0, l1 * l1 - a * a));
+    nk.copy(H).addScaledVector(dir, a).addScaledVector(pole, h);
+    turnBone(leg.hip, tmp.subVectors(K, H), nk.sub(H));
+    leg.knee.getWorldPosition(K);
+    leg.sole.getWorldPosition(S);
+    turnBone(leg.knee, tmp.subVectors(S, K), T.sub(K));
+  };
+
   let t = Math.random() * 10;
   let runT = Math.random();
   let dribbleT = 0;
@@ -371,14 +420,23 @@ export function createPlayerModel(look: PlayerLook, heightM: number, ringColor: 
       pivot.rotation.y += diff * Math.min(1, dt * 14);
       ring.scale.setScalar(1 - Math.min(0.4, Math.max(0, body.position.y)));
     },
-    applyPose(src, facing, lift = 0) {
+    applyPose(src, facing, lift = 0, extra) {
       joints.forEach((j, i) => j.quaternion.copy(src.q[i]!));
-      body.position.y = src.rootY * scale;
+      body.position.set(extra?.offset?.x ?? 0, src.rootY * scale, extra?.offset?.z ?? 0);
+      ring.position.set(body.position.x, ring.position.y, body.position.z);
       pivot.rotation.y = facing;
       body.updateMatrixWorld(true);
       const footY = Math.min(legL.sole.getWorldPosition(v1).y, legR.sole.getWorldPosition(v2).y) - root.position.y;
       body.position.y += lift - footY;
       ring.scale.setScalar(1 - Math.min(0.4, Math.max(0, lift)));
+      if (extra?.footL && (extra.footWL ?? 0) > 0.001) {
+        body.updateMatrixWorld(true);
+        solveLeg(legL, extra.footL, extra.footWL!);
+      }
+      if (extra?.footR && (extra.footWR ?? 0) > 0.001) {
+        body.updateMatrixWorld(true);
+        solveLeg(legR, extra.footR, extra.footWR!);
+      }
     },
     palms(outL, outR) {
       armL.palm.getWorldPosition(outL);

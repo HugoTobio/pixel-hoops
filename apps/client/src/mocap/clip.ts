@@ -18,6 +18,13 @@ export interface MocapSample {
   /** Peso "en la mano" izquierda/derecha (0–1). */
   holdL: number;
   holdR: number;
+  /** Desplazamiento de la raíz en el suelo (unidades del rig; y = 0). */
+  root: THREE.Vector3;
+  /** Pies apoyados: peso (0–1) y dónde deben quedar clavados (unidades del rig, en el suelo). */
+  footL: THREE.Vector3;
+  footR: THREE.Vector3;
+  footWL: number;
+  footWR: number;
 }
 
 const REST = idlePose(new PoseBuf(), 0);
@@ -79,10 +86,34 @@ export class MocapClip {
     out.holdR = this.track(i, j, u, (k) => b(k, 4));
     // El balón suelto sube lo mismo que subió el cuerpo de más cuando lo soltó.
     out.ball.y += this.json.lift[this.lastHeld[i]!]! * (e.jump - 1);
+
+    const root = (k: number, c: number) => this.json.root?.[k]?.[c] ?? 0;
+    out.root.set(this.track(i, j, u, (k) => root(k, 0)), 0, this.track(i, j, u, (k) => root(k, 1)));
+    // Pies: el objetivo no se interpola (salta de un apoyo al siguiente); el peso sí.
+    const ft = (k: number, c: number) => this.json.feet?.[k]?.[c] ?? 0;
+    const near = u < 0.5 ? i : j;
+    out.footWL = this.track(i, j, u, (k) => ft(k, 0));
+    out.footWR = this.track(i, j, u, (k) => ft(k, 3));
+    out.footL.set(ft(near, 1), 0, ft(near, 2));
+    out.footR.set(ft(near, 4), 0, ft(near, 5));
+    if (ft(near, 0) === 0) out.footWL = 0;
+    if (ft(near, 3) === 0) out.footWR = 0;
     return out;
   }
 
   static emptySample(): MocapSample {
-    return { pose: new PoseBuf(), yaw: 0, lift: 0, ball: new THREE.Vector3(), holdL: 0, holdR: 0 };
+    return {
+      pose: new PoseBuf(),
+      yaw: 0,
+      lift: 0,
+      ball: new THREE.Vector3(),
+      holdL: 0,
+      holdR: 0,
+      root: new THREE.Vector3(),
+      footL: new THREE.Vector3(),
+      footR: new THREE.Vector3(),
+      footWL: 0,
+      footWR: 0,
+    };
   }
 }
