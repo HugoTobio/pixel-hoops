@@ -5,7 +5,10 @@ estética pixelada low poly (el "estilo Brawl Stars" es SOLO estético: colorido
 NO es un juego de peleas). Interfaz en español.
 
 - **Jugar:** https://pixel-hoops.vercel.app
-- **Código local original:** `~/brawl-pixel` (Mac original). Copia en Dropbox: `/2026 HTS/CLAUDE/JUEGO BASKET/pixel-hoops`.
+- **Carpeta de trabajo (desde 2026-11-26):** Dropbox `/2026 HTS/CLAUDE/JUEGO BASKET/pixel-hoops`, con git (rama `main`).
+  `~/brawl-pixel` es la copia antigua del Mac original; ya no se usa.
+- `node_modules`, `dist` y `.deploy` están marcados para que Dropbox no los sincronice
+  (`xattr -w com.dropbox.ignored 1 <carpeta>`); en otro ordenador basta con `npm install` y `npx vercel link`.
 - Empezado el 2026-11-23. Último estado: 2026-11-26.
 
 ## Reglas que puso el usuario
@@ -100,4 +103,3 @@ con `npx vercel link` dentro de esa carpeta (proyecto **pixel-hoops**, equipo **
   ¿botón nuevo o al cambiar bruscamente de dirección con balón?).
 - Predicción en el cliente invitado, cambios defensivos ante bloqueos, pick-and-roll, desplazamiento defensivo
   con mocap, que la IA intente interceptar pases, animación de pase.
-- Poner el proyecto en git.
