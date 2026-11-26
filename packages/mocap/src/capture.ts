@@ -47,6 +47,18 @@ export interface BallKey {
   hand: HandOverride;
 }
 
+/**
+ * Corrección a mano de una articulación en un fotograma: un giro local [x, y, z, w] que se aplica encima
+ * de lo capturado (final = capturado · q). Así la corrección acompaña al movimiento original.
+ */
+export interface PoseKey {
+  /** Fotograma, contado desde el inicio de lo analizado (no del recorte). */
+  f: number;
+  /** Articulación (índice en SLOTS: 0 tronco, 1/3 caderas, 2/4 rodillas, 5/7 hombros, 6/8 codos). */
+  slot: number;
+  q: [number, number, number, number];
+}
+
 export interface Exaggerate {
   /** Multiplica la altura del salto. */
   jump: number;
@@ -71,6 +83,8 @@ export interface Capture {
   ballKeys?: BallKey[];
   /** Pies fijos en el suelo mientras están apoyados (por defecto sí). */
   feetLock?: boolean;
+  /** Correcciones a mano de la pose (articulaciones giradas en el estudio). */
+  poseKeys?: PoseKey[];
   /** Recorte (segundos del vídeo) dentro de lo analizado: lo de fuera no entra en el clip. */
   trim?: [number, number];
 }
@@ -205,7 +219,7 @@ export interface Ball2D {
 }
 
 /** Cómo influyen los keyframes en el fotograma i. */
-function keyInfluence<K extends { f: number }>(keys: K[], i: number, span: number, fade: number): { mode: 'none' | 'replace' | 'fade'; ks: { k: K; w: number }[] } {
+export function keyInfluence<K extends { f: number }>(keys: K[], i: number, span: number, fade: number): { mode: 'none' | 'replace' | 'fade'; ks: { k: K; w: number }[] } {
   let prev: K | null = null;
   let next: K | null = null;
   for (const k of keys) {
@@ -256,6 +270,8 @@ export interface Baked {
   localToImage(i: number, p: readonly number[]): { x: number; y: number } | null;
   localToWorld(i: number, p: readonly number[]): [number, number, number];
   worldToLocal(i: number, w: readonly number[]): [number, number, number];
+  /** Frames del clip SIN las correcciones de pose (para reaplicarlas rápido mientras se edita). */
+  baseFrames: number[][];
   /** Balón final en coordenadas locales (con keyframes aplicados), o null. */
   ballLocal: ([number, number, number] | null)[];
 }
@@ -268,6 +284,7 @@ export function bakeCapture(full: Capture, clean = true): Baked {
     frames: full.frames.slice(f0, f1 + 1),
     range: [full.range[0] + f0 / full.fps, full.range[0] + f1 / full.fps],
     ballKeys: (full.ballKeys ?? []).filter((k) => k.f >= f0 && k.f <= f1).map((k) => ({ ...k, f: k.f - f0 })),
+    poseKeys: (full.poseKeys ?? []).filter((k) => k.f >= f0 && k.f <= f1).map((k) => ({ ...k, f: k.f - f0 })),
   };
   const N = cap.frames.length;
   const W = cap.width;
@@ -538,12 +555,13 @@ export function bakeCapture(full: Capture, clean = true): Baked {
   const k = RIG_HIP_Y / standHipY;
 
   const r = (x: number) => Math.round(x * 1000) / 1000;
+  const baseFrames = frames.map((f) => [r(f.rootY), ...f.q.flatMap((q) => [r(q.x), r(q.y), r(q.z), r(q.w)]), -1]);
   const clip: MocapClipJson = {
     source: `Vídeo → MediaPipe Pose (estudio de mocap): ${cap.name}`,
     fps: cap.fps,
     loop: false,
     duration: +(N / cap.fps).toFixed(3),
-    frames: frames.map((f) => [r(f.rootY), ...f.q.flatMap((q) => [r(q.x), r(q.y), r(q.z), r(q.w)]), -1]),
+    frames: [],
     yaw: yaw.map(r),
     lift: jump.map((j) => r(j * k)),
     root: rx.map((x, i) => [r(x * k), r(rz[i]! * k)]),
@@ -557,6 +575,7 @@ export function bakeCapture(full: Capture, clean = true): Baked {
     ball: ballWorld.map((b, i) => [r(b[0]! * k), r(b[1]! * k), r(b[2]! * k), r(wL[i]!), r(wR[i]!)]),
     exaggerate: { ...cap.exaggerate },
   };
+  clip.frames = applyPoseKeys(baseFrames, cap.poseKeys ?? [], cap.fps);
   const skeleton = world.map((pts) => SKELETON_POINTS.flatMap((j) => [r(pts[j]!.x), r(pts[j]!.y), r(pts[j]!.z)]));
   return {
     clip,
@@ -566,6 +585,7 @@ export function bakeCapture(full: Capture, clean = true): Baked {
     ballMeters: ballM.map((b, i) => (b ? ballWorld[i]! : null)),
     ball2d,
     ballLocal: ballM.map((b) => (b ? [b.x, b.y, b.z] : null)),
+    baseFrames,
     f0,
     range: cap.range,
     scale: k,
@@ -696,6 +716,44 @@ function smoothArmHints(body: Pose[], fps: number): ArmHints[] {
     });
   });
   return body.map((_, i) => ({ L: steady[0]![i]!.clone().applyQuaternion(torso[i]!), R: steady[1]![i]!.clone().applyQuaternion(torso[i]!) }));
+}
+
+/**
+ * Aplica las correcciones de pose a unos frames de clip (rootY, 9 cuaterniones, ballY) y devuelve otros nuevos.
+ * Por articulación: entre dos correcciones a menos de 0,75 s se interpola; una suelta se desvanece en 0,25 s.
+ * Es barato (se usa en directo mientras se gira una articulación en el estudio).
+ */
+export function applyPoseKeys(frames: number[][], keys: PoseKey[], fps: number): number[][] {
+  const out = frames.map((f) => f.slice());
+  if (!keys.length) return out;
+  const span = Math.round(fps * 0.75);
+  const fade = Math.max(2, Math.round(fps * 0.25));
+  const id = new THREE.Quaternion();
+  const d = new THREE.Quaternion();
+  const q = new THREE.Quaternion();
+  const kq = new THREE.Quaternion();
+  for (let slot = 0; slot < 9; slot++) {
+    const ks = keys.filter((k) => k.slot === slot).sort((a, b) => a.f - b.f);
+    if (!ks.length) continue;
+    out.forEach((f, i) => {
+      const inf = keyInfluence(ks, i, span, fade);
+      if (inf.mode === 'none') return;
+      // Corrección de este fotograma: mezcla de las de los keyframes (desde "sin corrección" si se desvanece).
+      d.identity();
+      if (inf.mode === 'replace' && inf.ks.length === 2) {
+        d.fromArray(inf.ks[0]!.k.q).slerp(kq.fromArray(inf.ks[1]!.k.q), inf.ks[1]!.w);
+      } else {
+        for (const { k, w } of inf.ks) d.multiply(kq.copy(id).slerp(q.fromArray(k.q), w));
+      }
+      const o = 1 + slot * 4;
+      q.set(f[o]!, f[o + 1]!, f[o + 2]!, f[o + 3]!).multiply(d).normalize();
+      f[o] = Math.round(q.x * 1000) / 1000;
+      f[o + 1] = Math.round(q.y * 1000) / 1000;
+      f[o + 2] = Math.round(q.z * 1000) / 1000;
+      f[o + 3] = Math.round(q.w * 1000) / 1000;
+    });
+  }
+  return out;
 }
 
 /** JSON de landmarks limpios (antes del retargeting), uno por clip. */

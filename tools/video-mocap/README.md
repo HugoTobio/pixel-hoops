@@ -76,6 +76,14 @@ personaje anima **en el sitio** (conserva el giro, no se desplaza), para ver bie
    Cada keyframe puede forzar la mano (automática / izquierda / derecha / suelto). `,` `.` saltan entre
    keyframes y Supr borra el del fotograma actual. Sobre el vídeo: amarillo discontinuo = detectado, verde =
    corregido (relleno = keyframe). Los keyframes se guardan en `capture.json` (no hace falta volver a analizar).
+   **Corregir la pose** con keyframes: **Editar pose** (tecla P), clic en una parte del maniquí (tronco, hombro,
+   codo, cadera, rodilla: se resalta en amarillo) y girar los aros. La corrección es un giro que se suma a lo
+   capturado en ese fotograma (no una postura fija), así que el movimiento original se conserva alrededor: entre
+   dos correcciones de la misma articulación a menos de 0,75 s se interpola, y una suelta se desvanece en 0,25 s.
+   Rombos morados en la línea de tiempo; `,` `.` saltan entre correcciones de la articulación elegida y
+   **Quitar corrección** (o Supr) la borra. Con **Pies fijos**, caderas y rodillas de un pie apoyado se reajustan
+   para que el pie no se mueva. Se guarda en la captura (`poseKeys`), en el borrador y en el clip, y la usan
+   también los bucles (`bake:loop`). Los landmarks exportados son los de MediaPipe: no llevan estas correcciones.
 7. **GUARDAR CLIP** → `apps/client/src/content/anims/<nombre>.json` (con la exageración elegida). Ojo: el juego
    solo usa los clips que carga `apps/client/src/render/anim.ts` (hoy `clips.json` y `dribble-run.json`).
 8. **EXPORTAR LANDMARKS** → `data/<nombre>/landmarks.json` (y se descarga). Ver formato abajo.

@@ -24,6 +24,12 @@ export interface Mannequin {
   applyPose(src: PoseBuf, facing: number, lift?: number, extra?: MannequinExtra): void;
   /** Posición (mundo) de las palmas. */
   palms(outL: THREE.Vector3, outR: THREE.Vector3): void;
+  /** Las 9 articulaciones, en el orden de SLOTS (para girarlas a mano). */
+  joints: THREE.Object3D[];
+  /** Articulación bajo el rayo (índice en SLOTS) o −1. Pulsar un hueso elige la articulación de la que cuelga. */
+  pickJoint(ray: THREE.Raycaster): number;
+  /** Resalta una articulación (−1: ninguna). */
+  highlight(slot: number): void;
 }
 
 const SKIN = 0xd9cbb4;
@@ -147,7 +153,21 @@ export function createMannequin(heightM = RIG.height): Mannequin {
   const armR = makeArm(-1);
 
   // Orden = SLOTS (pose.ts)
-  const joints = [upper, legL.hip, legL.knee, legR.hip, legR.knee, armL.shoulder, armL.elbow, armR.shoulder, armR.elbow];
+  const joints: THREE.Object3D[] = [upper, legL.hip, legL.knee, legR.hip, legR.knee, armL.shoulder, armL.elbow, armR.shoulder, armR.elbow];
+  const meshes: THREE.Mesh[] = [];
+  pivot.traverse((o) => o instanceof THREE.Mesh && o !== arrow && meshes.push(o));
+  /** La articulación de la que cuelga un objeto (subiendo por los padres). */
+  const jointOf = (o: THREE.Object3D | null): number => {
+    for (let p = o; p; p = p.parent) {
+      const i = joints.indexOf(p);
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
+  // Resaltado: las bolas de la articulación elegida se ven en amarillo.
+  const highlightMat = mat(0xf2c94c);
+  const original = new Map<THREE.Mesh, THREE.Material>();
+  meshes.forEach((m) => original.set(m, m.material as THREE.Material));
   const v1 = new THREE.Vector3();
   const v2 = new THREE.Vector3();
   const pole = new THREE.Vector3();
@@ -173,6 +193,17 @@ export function createMannequin(heightM = RIG.height): Mannequin {
         if (!target || w <= 0.001) continue;
         body.updateMatrixWorld(true);
         solveTwoBone(leg.hip, leg.knee, leg.sole, target, w, pole);
+      }
+    },
+    joints,
+    pickJoint(ray) {
+      const hit = ray.intersectObjects(meshes, false)[0];
+      return hit ? jointOf(hit.object) : -1;
+    },
+    highlight(slot) {
+      for (const m of meshes) {
+        // Solo las piezas que cuelgan directamente de esa articulación (no las de más abajo).
+        m.material = slot >= 0 && jointOf(m) === slot ? highlightMat : original.get(m)!;
       }
     },
     palms(outL, outR) {

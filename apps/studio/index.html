@@ -91,6 +91,9 @@
       .tl-ticks i { position: absolute; top: 0; width: 1px; height: 4px; background: #ffffff30; }
       .tl-ticks i.big { height: 14px; background: #ffffff40; }
       .tl-key { position: absolute; top: 13px; width: 8px; height: 8px; margin-left: -4px; background: #6fe3a0; transform: rotate(45deg); border: 1px solid #0f1520; z-index: 2; cursor: pointer; }
+      .tl-key.pose { background: #b48cff; top: 4px; }
+      body.posing #view { cursor: pointer; }
+      body.posing .pane:last-child { outline: 2px solid #b48cff; outline-offset: -2px; }
       .tl-handle { position: absolute; top: 4px; width: 12px; height: 26px; margin-left: -6px; z-index: 3; cursor: ew-resize; }
       .tl-handle::before { content: ''; position: absolute; left: 4px; top: 0; bottom: 0; width: 4px; background: var(--accent); border-radius: 2px; box-shadow: 0 0 0 1px #0f1520; }
       .tl-handle.in::after, .tl-handle.out::after { position: absolute; top: -1px; font-size: 10px; color: var(--accent); font-weight: 700; }
@@ -211,6 +214,10 @@
         <button type="button" id="export" disabled title="Landmarks de MediaPipe limpios (antes del retargeting) a tools/video-mocap/data/&lt;nombre&gt;/landmarks.json y descarga">EXPORTAR LANDMARKS</button>
       </div>
       <div class="row">
+        <button type="button" id="pose" aria-pressed="false" title="Clic en una parte del maniquí y gira los aros para corregir esa articulación en este fotograma (tecla P)">Editar pose</button>
+        <small id="pose-text"></small>
+        <button type="button" id="pose-del" disabled title="Quita la corrección de la articulación elegida en este fotograma (Supr en modo pose)">Quitar corrección</button>
+        <span class="sep"></span>
         <button type="button" id="edit" aria-pressed="false" title="Clic o arrastrar sobre el vídeo para colocar el balón en este fotograma (tecla B)">Editar balón</button>
         <button type="button" id="key-prev" title="Tecla ,">◀ key</button>
         <button type="button" id="key-next" title="Tecla .">key ▶</button>
@@ -245,7 +252,7 @@
         <button type="button" data-cam="tv">Retransmisión</button>
         <button type="button" data-cam="top">Cenital</button>
         <span class="sep"></span>
-        <small>espacio play · ←/→ fotograma · I/O tramo · B editar balón</small>
+        <small>espacio play · ←/→ fotograma · I/O tramo · B editar balón · P editar pose · ,/. keyframes · Supr borrar</small>
       </div>
     </footer>
     <script type="module" src="/src/main.ts"></script>

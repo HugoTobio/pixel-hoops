@@ -8,6 +8,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import {
+  applyPoseKeys,
   bakeCapture,
   DEFAULT_EXAGGERATE,
   detectBall,
@@ -20,6 +21,7 @@ import {
   type Capture,
   type CaptureFrame,
   type HandOverride,
+  type PoseKey,
 } from '@brawl/mocap';
 import { createMannequin } from './mannequin';
 
@@ -106,6 +108,18 @@ gizmoHelper.visible = false;
 scene.add(gizmoHelper);
 gizmo.addEventListener('dragging-changed', (e) => (controls.enabled = !e.value));
 
+// Aros para girar la articulación elegida (editar pose).
+const poseGizmo = new TransformControls(camera, canvas);
+poseGizmo.setMode('rotate');
+poseGizmo.setSpace('local');
+poseGizmo.setSize(0.7);
+poseGizmo.enabled = false;
+const poseGizmoHelper = poseGizmo.getHelper();
+poseGizmoHelper.visible = false;
+scene.add(poseGizmoHelper);
+poseGizmo.addEventListener('dragging-changed', (e) => (controls.enabled = !e.value));
+const JOINT_NAMES = ['tronco', 'cadera izq.', 'rodilla izq.', 'cadera der.', 'rodilla der.', 'hombro izq.', 'codo izq.', 'hombro der.', 'codo der.'];
+
 // --- Estado --------------------------------------------------------------------------------
 const state = {
   name: '',
@@ -124,6 +138,10 @@ const state = {
   cancel: false,
   dirty: false,
   editing: false,
+  /** Editar la pose: girar articulaciones del maniquí con aros. */
+  poseEdit: false,
+  /** Articulación elegida (índice en SLOTS) o −1. */
+  joint: -1,
   /** Mostrar el desplazamiento por el suelo (por defecto no: anima en el sitio, como un bucle). */
   travel: false,
   /** fps del vídeo medidos al abrirlo (antes de analizar); con captura mandan los de la captura. */
@@ -183,6 +201,8 @@ async function open(name: string) {
   state.mocap = null;
   state.dirty = false;
   setEditing(false);
+  setPoseEdit(false);
+  state.joint = -1;
   renderKeys();
   $<HTMLButtonElement>('#export').disabled = true;
   history.replaceState(null, '', `?c=${encodeURIComponent(name)}`);
@@ -272,7 +292,7 @@ function markDirty(msg = 'Cambios sin guardar: pulsa GUARDAR CLIP.') {
 // --- Borrador automático -------------------------------------------------------------------
 // Lo editable de una captura se guarda al momento en disco (data/<nombre>/borrador.json): si la página se
 // recarga o se cierra sin GUARDAR, al volver a abrir la captura se recupera, en este u otro navegador.
-type Draft = Pick<Capture, 'ballKeys' | 'exaggerate' | 'feetLock' | 'trim'> & { at: number; analysis: string };
+type Draft = Pick<Capture, 'ballKeys' | 'poseKeys' | 'exaggerate' | 'feetLock' | 'trim'> & { at: number; analysis: string };
 /** Huella del análisis: el borrador solo vale para el mismo análisis. */
 const analysisId = (c: Capture) => `${c.range[0].toFixed(4)}|${c.range[1].toFixed(4)}|${c.fps.toFixed(3)}|${c.frames.length}`;
 let draftTimer = 0;
@@ -283,7 +303,7 @@ function queueDraft() {
 async function saveDraft() {
   const c = state.capture;
   if (!c || !state.dirty) return;
-  const d: Draft = { at: Date.now(), analysis: analysisId(c), ballKeys: c.ballKeys, exaggerate: c.exaggerate, feetLock: c.feetLock, trim: c.trim };
+  const d: Draft = { at: Date.now(), analysis: analysisId(c), ballKeys: c.ballKeys, poseKeys: c.poseKeys, exaggerate: c.exaggerate, feetLock: c.feetLock, trim: c.trim };
   try {
     await api(`draft/${state.name}`, { method: 'PUT', body: JSON.stringify(d) });
   } catch {
@@ -303,6 +323,7 @@ async function restoreDraft(c: Capture): Promise<Date | null> {
     c.exaggerate = d.exaggerate ?? c.exaggerate;
     c.feetLock = d.feetLock ?? true;
     c.trim = d.trim;
+    c.poseKeys = d.poseKeys ?? [];
     return new Date(d.at);
   } catch {
     return null; // no hay borrador
@@ -457,6 +478,8 @@ $<HTMLFormElement>('#del-form').onsubmit = async (e) => {
 function closeCapture() {
   setPlaying(false);
   setEditing(false);
+  setPoseEdit(false);
+  state.joint = -1;
   state.name = '';
   state.capture = null;
   state.baked = state.bakedRaw = null;
@@ -659,6 +682,9 @@ async function analyze() {
       exaggerate: state.capture?.exaggerate ?? { ...DEFAULT_EXAGGERATE },
       feetLock: state.capture?.feetLock ?? true,
       // Los keyframes se conservan: se recolocan por tiempo en el nuevo análisis.
+      poseKeys: (state.capture?.poseKeys ?? [])
+        .map((k) => ({ ...k, f: Math.round((state.capture!.range[0] + k.f / state.capture!.fps - a) * fps) }))
+        .filter((k) => k.f >= 0 && k.f < frames.length),
       ballKeys: (state.capture?.ballKeys ?? [])
         .map((k) => ({ ...k, f: Math.round((state.capture!.range[0] + k.f / state.capture!.fps - a) * fps) }))
         .filter((k) => k.f >= 0 && k.f < frames.length),
@@ -781,6 +807,20 @@ function renderKeys() {
     });
     box.append(el);
   }
+  // Correcciones de pose: rombos morados (uno por fotograma, aunque haya varias articulaciones).
+  for (const f of new Set((cap.poseKeys ?? []).map((k) => k.f))) {
+    const el = document.createElement('div');
+    el.className = 'tl-key pose';
+    const t = cap.range[0] + f / cap.fps;
+    el.style.left = `${(t / d) * 100}%`;
+    const which = cap.poseKeys!.filter((k) => k.f === f).map((k) => JOINT_NAMES[k.slot]);
+    el.title = `Pose corregida · fotograma ${frameAt(t) + 1}: ${which.join(', ')}`;
+    el.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      seekFrame(f);
+    });
+    box.append(el);
+  }
   updateKeyUi();
 }
 function updateKeyUi() {
@@ -795,6 +835,7 @@ function updateKeyUi() {
     inp.disabled = !p || bakedIndex(f) < 0;
     if (document.activeElement !== inp) inp.value = p ? p[c]!.toFixed(2) : '';
   });
+  updatePoseUi();
 }
 /** Pone (o mueve) el keyframe del fotograma actual en una posición 3D local (metros). */
 function setKey3D(p: [number, number, number]) {
@@ -840,12 +881,14 @@ gizmo.addEventListener('objectChange', () => {
   setKey3D(state.travel ? b.worldToLocal(i, [w.x, w.y, w.z]) : [w.x, w.y, w.z]);
 });
 function jumpKey(dir: 1 | -1) {
+  if (state.poseEdit) return jumpPoseKey(dir);
   const keys = state.capture?.ballKeys ?? [];
   const f = currentFrame();
   const k = dir > 0 ? keys.find((q) => q.f > f) : [...keys].reverse().find((q) => q.f < f);
   if (k) seekFrame(k.f);
 }
 function deleteKey() {
+  if (state.poseEdit) return deletePoseKey();
   const cap = state.capture;
   const k = keyAt(currentFrame());
   if (!cap || !k) return;
@@ -854,6 +897,7 @@ function deleteKey() {
   markDirty('Keyframe borrado (sin guardar).');
 }
 function setEditing(on: boolean) {
+  if (on) setPoseEdit(false);
   state.editing = on && !!state.capture;
   document.body.classList.toggle('editing', state.editing);
   $('#edit').setAttribute('aria-pressed', String(state.editing));
@@ -864,6 +908,125 @@ function setEditing(on: boolean) {
   }
 }
 $('#edit').onclick = () => setEditing(!state.editing);
+
+// --- Editar pose: girar articulaciones ------------------------------------------------------
+/** Correcciones de pose dentro del clip (contadas desde su inicio), para reaplicarlas rápido. */
+function clipPoseKeys(): PoseKey[] {
+  const b = state.baked;
+  const cap = state.capture;
+  if (!b || !cap) return [];
+  const n = b.world.length;
+  return (cap.poseKeys ?? []).filter((k) => k.f >= b.f0 && k.f < b.f0 + n).map((k) => ({ ...k, f: k.f - b.f0 }));
+}
+/** Reaplica las correcciones de pose sin rehornear todo (rápido, para usar mientras se gira). */
+function refreshPose() {
+  const cap = state.capture;
+  if (!cap) return;
+  const keys = clipPoseKeys();
+  for (const b of [state.baked, state.bakedRaw]) if (b) b.clip.frames = applyPoseKeys(b.baseFrames, keys, cap.fps);
+  pickClip();
+}
+const poseKeyAt = (f: number, slot: number) => state.capture?.poseKeys?.find((k) => k.f === f && k.slot === slot) ?? null;
+function selectJoint(slot: number) {
+  state.joint = slot;
+  player.highlight(slot);
+  if (slot >= 0) poseGizmo.attach(player.joints[slot]!);
+  else poseGizmo.detach();
+  poseGizmoHelper.visible = slot >= 0 && state.poseEdit;
+  poseGizmo.enabled = slot >= 0 && state.poseEdit;
+  updatePoseUi();
+  if (slot >= 0 && (slot === 1 || slot === 2 || slot === 3 || slot === 4) && state.capture?.feetLock)
+    status(`${JOINT_NAMES[slot]}: con «Pies fijos» la pierna se reajusta para que el pie apoyado no se mueva (gira la articulación con el pie en el aire, o desactiva Pies fijos).`);
+  else if (slot >= 0) status(`${JOINT_NAMES[slot]}: gira los aros para corregirla en este fotograma.`);
+}
+function setPoseEdit(on: boolean) {
+  if (on) setEditing(false);
+  state.poseEdit = on && !!state.capture;
+  document.body.classList.toggle('posing', state.poseEdit);
+  $('#pose').setAttribute('aria-pressed', String(state.poseEdit));
+  if (state.poseEdit) {
+    setPlaying(false);
+    status('Editar pose: haz clic en una parte del maniquí (tronco, hombro, codo, cadera, rodilla) y gira los aros. ←/→ para moverte.');
+    selectJoint(state.joint);
+  } else {
+    poseGizmo.detach();
+    poseGizmo.enabled = false;
+    poseGizmoHelper.visible = false;
+    player.highlight(-1);
+  }
+  updatePoseUi();
+}
+function updatePoseUi() {
+  const cap = state.capture;
+  const n = cap?.poseKeys?.length ?? 0;
+  const k = state.joint >= 0 ? poseKeyAt(currentFrame(), state.joint) : null;
+  $('#pose-text').textContent =
+    `${state.joint >= 0 ? JOINT_NAMES[state.joint] : 'ninguna articulación'} · ${n} correcci${n === 1 ? 'ón' : 'ones'}` + (k ? ' · corregida en este fotograma' : '');
+  $<HTMLButtonElement>('#pose-del').disabled = !k;
+}
+function jumpPoseKey(dir: 1 | -1) {
+  const f = currentFrame();
+  const keys = (state.capture?.poseKeys ?? []).filter((k) => state.joint < 0 || k.slot === state.joint).map((k) => k.f);
+  const g = dir > 0 ? Math.min(...keys.filter((x) => x > f)) : Math.max(...keys.filter((x) => x < f));
+  if (Number.isFinite(g)) seekFrame(g);
+}
+function deletePoseKey() {
+  const cap = state.capture;
+  const k = state.joint >= 0 ? poseKeyAt(currentFrame(), state.joint) : null;
+  if (!cap || !k) return;
+  cap.poseKeys = cap.poseKeys!.filter((q) => q !== k);
+  refreshPose();
+  renderKeys();
+  updatePoseUi();
+  markDirty(`Corrección de ${JOINT_NAMES[k.slot]} quitada (sin guardar).`);
+}
+$('#pose').onclick = () => setPoseEdit(!state.poseEdit);
+$('#pose-del').onclick = deletePoseKey;
+
+// Clic en el maniquí (sin arrastrar y sin tocar los aros): elegir articulación.
+const ray = new THREE.Raycaster();
+let downAt: { x: number; y: number } | null = null;
+canvas.addEventListener('pointerdown', (e) => (downAt = { x: e.clientX, y: e.clientY }));
+canvas.addEventListener('pointerup', (e) => {
+  if (!state.poseEdit || !downAt || poseGizmo.dragging || poseGizmo.axis) return;
+  if (Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 5) return; // era un giro de cámara
+  const r = canvas.getBoundingClientRect();
+  ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  const slot = player.pickJoint(ray);
+  if (slot >= 0 || state.joint >= 0) selectJoint(slot);
+});
+
+// Girar los aros: la corrección es el giro hecho desde que se empezó a arrastrar, encima de la que hubiera.
+let dragStart: { display: THREE.Quaternion; key: THREE.Quaternion; f: number; slot: number } | null = null;
+poseGizmo.addEventListener('mouseDown', () => {
+  const f = currentFrame();
+  if (state.joint < 0 || bakedIndex(f) < 0) return;
+  const k = poseKeyAt(f, state.joint);
+  dragStart = {
+    display: player.joints[state.joint]!.quaternion.clone(),
+    key: k ? new THREE.Quaternion().fromArray(k.q) : new THREE.Quaternion(),
+    f,
+    slot: state.joint,
+  };
+});
+poseGizmo.addEventListener('mouseUp', () => {
+  dragStart = null;
+  renderKeys();
+  updatePoseUi();
+});
+poseGizmo.addEventListener('objectChange', () => {
+  const cap = state.capture;
+  if (!cap || !dragStart) return;
+  const turn = dragStart.display.clone().invert().multiply(player.joints[dragStart.slot]!.quaternion);
+  const q = dragStart.key.clone().multiply(turn).normalize();
+  const arr: [number, number, number, number] = [q.x, q.y, q.z, q.w];
+  cap.poseKeys ??= [];
+  const k = poseKeyAt(dragStart.f, dragStart.slot);
+  if (k) k.q = arr;
+  else cap.poseKeys.push({ f: dragStart.f, slot: dragStart.slot, q: arr });
+  refreshPose();
+  markDirty(`${JOINT_NAMES[dragStart.slot]} corregida en el fotograma ${frameAt(video.currentTime) + 1} (sin guardar).`);
+});
 $('#key-prev').onclick = () => jumpKey(-1);
 $('#key-next').onclick = () => jumpKey(1);
 $('#key-del').onclick = deleteKey;
@@ -1165,10 +1328,14 @@ addEventListener('keydown', (e) => {
   } else if (e.code === 'KeyI') markIn();
   else if (e.code === 'KeyO') markOut();
   else if (e.code === 'KeyB') setEditing(!state.editing);
+  else if (e.code === 'KeyP') setPoseEdit(!state.poseEdit);
   else if (e.code === 'Comma') jumpKey(-1);
   else if (e.code === 'Period') jumpKey(1);
   else if (e.code === 'Delete' || e.code === 'Backspace') deleteKey();
-  else if (e.code === 'Escape') setEditing(false);
+  else if (e.code === 'Escape') {
+    setEditing(false);
+    setPoseEdit(false);
+  }
 });
 
 // --- Cámaras -------------------------------------------------------------------------------
@@ -1380,4 +1547,4 @@ await refreshLibrary();
 const want = new URLSearchParams(location.search).get('c');
 if (want && library.some((i) => i.name === want)) await open(want);
 else if (library[0]) await open(library[0].name);
-if (import.meta.env.DEV) Object.assign(window, { __studio: { state, frameAt, timeOf, seekToFrame, analyze, save, seek, setPlaying, seekFrame, setKey, setKey3D, exportLandmarks, setEditing, applyRange, keyHandle, gizmo, player } });
+if (import.meta.env.DEV) Object.assign(window, { __studio: { state, frameAt, timeOf, seekToFrame, setPoseEdit, selectJoint, poseGizmo, analyze, save, seek, setPlaying, seekFrame, setKey, setKey3D, exportLandmarks, setEditing, applyRange, keyHandle, gizmo, player } });
