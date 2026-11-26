@@ -1,0 +1,118 @@
+/**
+ * Retargeting por direcciones de hueso, compartido por los BVH de CMU (bake.ts) y por la captura
+ * desde vídeo (tools/video-mocap/bake-pose.ts).
+ *
+ * De cada fotograma se toman las direcciones reales de los huesos (muslo, espinilla, brazo, antebrazo,
+ * tronco) en el espacio del cuerpo (sin rumbo ni traslación) y se convierten en rotaciones locales de
+ * nuestro rig, cuyos huesos en reposo apuntan a −Y. Así da igual que las medidas o la pose de reposo
+ * de la fuente sean distintas.
+ */
+import * as THREE from 'three';
+import type { Pose } from './sample';
+
+/** Altura de cadera del rig de referencia (jugador de 2,00 m), igual que en player-model.ts. */
+export const RIG_HIP_Y = 1.02;
+
+export const SLOTS = ['upper', 'hipL', 'kneeL', 'hipR', 'kneeR', 'shL', 'elL', 'shR', 'elR'] as const;
+
+export const UP = new THREE.Vector3(0, 1, 0);
+export const v = () => new THREE.Vector3();
+
+/** Rumbo del cuerpo (yaw) a partir de caderas + hombros: adelante = arriba × derecha. */
+export function heading(p: Pose): number {
+  const right = v().subVectors(p.RightUpLeg, p.LeftUpLeg).add(v().subVectors(p.RightArm, p.LeftArm));
+  right.y = 0;
+  const fwd = v().crossVectors(UP, right).normalize();
+  return Math.atan2(fwd.x, fwd.z);
+}
+
+/**
+ * Pasa la pose a espacio del cuerpo: caderas en el origen XZ, mirando a +Z.
+ * Devuelve también el rumbo suavizado y desenrollado de cada fotograma (radianes).
+ */
+export function toBodySpace(frames: Pose[], window = 5): { body: Pose[]; yaw: number[] } {
+  const yaws = frames.map(heading);
+  for (let i = 1; i < yaws.length; i++) {
+    while (yaws[i]! - yaws[i - 1]! > Math.PI) yaws[i]! -= 2 * Math.PI;
+    while (yaws[i]! - yaws[i - 1]! < -Math.PI) yaws[i]! += 2 * Math.PI;
+  }
+  const yaw: number[] = [];
+  const body = frames.map((p, i) => {
+    let sum = 0;
+    let n = 0;
+    for (let k = Math.max(0, i - window); k <= Math.min(frames.length - 1, i + window); k++, n++) sum += yaws[k]!;
+    yaw.push(sum / n);
+    const q = new THREE.Quaternion().setFromAxisAngle(UP, -sum / n);
+    const origin = v().set(p.Hips.x, 0, p.Hips.z);
+    const out = {} as Pose;
+    for (const [k, pos] of Object.entries(p)) out[k as keyof Pose] = pos.clone().sub(origin).applyQuaternion(q);
+    return out;
+  });
+  return { body, yaw };
+}
+
+/** Base ortonormal de un hueso que en reposo apunta a −Y; `hint` define hacia dónde mira su +Z. */
+export function boneBasis(dir: THREE.Vector3, hint: THREE.Vector3): THREE.Quaternion {
+  const y = dir.clone().normalize().negate();
+  let z = hint.clone().addScaledVector(y, -hint.dot(y));
+  if (z.lengthSq() < 1e-6) z = v().set(0, 0, 1).addScaledVector(y, -y.z);
+  z.normalize();
+  const x = v().crossVectors(y, z).normalize();
+  z.crossVectors(x, y).normalize();
+  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+}
+
+/** Base del tronco: Y = caderas→cuello, X = hombro derecho→izquierdo (izquierda anatómica = +X). */
+export function torsoBasis(p: Pose): THREE.Quaternion {
+  const y = v().subVectors(p.Neck, p.Hips).normalize();
+  const x = v().subVectors(p.LeftArm, p.RightArm);
+  x.addScaledVector(y, -x.dot(y)).normalize();
+  const z = v().crossVectors(x, y).normalize();
+  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+}
+
+export interface Frame {
+  rootY: number;
+  q: THREE.Quaternion[];
+  /** Altura del balón (unidades del rig) o −1 si va pegado a la mano. */
+  ballY: number;
+  handY: number;
+}
+
+/**
+ * @param standHipY altura de cadera de pie en las unidades de la fuente (para escalar al rig).
+ * @param torsoRestInv inversa de la base del tronco en la pose de calibración (tronco recto).
+ */
+export function retarget(p: Pose, standHipY: number, torsoRestInv: THREE.Quaternion): Frame {
+  const k = RIG_HIP_Y / standHipY;
+  const upper = torsoBasis(p).multiply(torsoRestInv);
+  const upperInv = upper.clone().invert();
+
+  const leg = (hip: THREE.Vector3, knee: THREE.Vector3, ankle: THREE.Vector3, toe: THREE.Vector3) => {
+    const toeDir = v().subVectors(toe, ankle);
+    const qThigh = boneBasis(v().subVectors(knee, hip), toeDir);
+    const qShin = boneBasis(v().subVectors(ankle, knee), toeDir);
+    return [qThigh, qThigh.clone().invert().multiply(qShin)];
+  };
+  const arm = (sh: THREE.Vector3, el: THREE.Vector3, wr: THREE.Vector3) => {
+    const upperDir = v().subVectors(el, sh);
+    const foreDir = v().subVectors(wr, el);
+    // El brazo "mira" hacia donde se dobla el antebrazo; si está recto, hacia delante del tronco.
+    const hint = foreDir.clone().addScaledVector(upperDir.clone().normalize(), -foreDir.dot(upperDir.clone().normalize()));
+    if (hint.lengthSq() < 1e-4) hint.set(0, 0, 1).applyQuaternion(upper);
+    const qArm = boneBasis(upperDir, hint);
+    const qFore = boneBasis(foreDir, hint);
+    return [upperInv.clone().multiply(qArm), qArm.clone().invert().multiply(qFore)];
+  };
+
+  const [hipL, kneeL] = leg(p.LeftUpLeg, p.LeftLeg, p.LeftFoot, p.LeftToeBase);
+  const [hipR, kneeR] = leg(p.RightUpLeg, p.RightLeg, p.RightFoot, p.RightToeBase);
+  const [shL, elL] = arm(p.LeftArm, p.LeftForeArm, p.LeftHand);
+  const [shR, elR] = arm(p.RightArm, p.RightForeArm, p.RightHand);
+  return {
+    rootY: (p.Hips.y - standHipY) * k,
+    q: [upper, hipL!, kneeL!, hipR!, kneeR!, shL!, elL!, shR!, elR!],
+    ballY: -1,
+    handY: p.RightHand.y * k,
+  };
+}

@@ -1,27 +1,23 @@
 /**
  * Hornea clips de mocap (BVH de CMU) al esqueleto low poly del juego.
  *
- * Retargeting por direcciones: de cada fotograma se toman las direcciones reales de los huesos
- * (muslo, espinilla, brazo, antebrazo, tronco) en el espacio del cuerpo (sin rumbo ni traslación)
- * y se convierten en rotaciones locales de nuestro rig, cuyos huesos en reposo apuntan a −Y.
- * Así da igual que las medidas o la pose de reposo del mocap sean distintas.
+ * El retargeting (direcciones de hueso → rotaciones del rig) está en retarget.ts.
  *
  * Uso: npm run bake:mocap   (lee tools/mocap/bvh/*.bvh, escribe apps/client/src/content/anims/clips.json)
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
-import { sampleBvh, type Pose, type Sampled } from './sample';
+import { retarget as retargetPose, RIG_HIP_Y, SLOTS, toBodySpace, torsoBasis, type Frame } from './retarget';
+import { sampleBvh, type Sampled } from './sample';
 
 const FPS = 30;
-const BVH = (n: string) => new URL(`./bvh/${n}.bvh`, import.meta.url).pathname;
-const OUT = new URL('../../apps/client/src/content/anims/clips.json', import.meta.url).pathname;
+const BVH = (n: string) => fileURLToPath(new URL(`./bvh/${n}.bvh`, import.meta.url));
+const OUT = fileURLToPath(new URL('../../apps/client/src/content/anims/clips.json', import.meta.url));
 
-/** Altura de cadera del rig de referencia (jugador de 2,00 m), igual que en player-model.ts. */
-const RIG_HIP_Y = 1.02;
 /** Radio del balón visual en unidades del rig de referencia. */
 const BALL_R = 0.2;
-
-export const SLOTS = ['upper', 'hipL', 'kneeL', 'hipR', 'kneeR', 'shL', 'elL', 'shR', 'elR'] as const;
 
 interface ClipSpec {
   name: string;
@@ -39,103 +35,8 @@ const SPECS: ClipSpec[] = [
   { name: 'shoot', file: '06_15', from: 2.15, to: 3.6, loop: false, shoot: true },
 ];
 
-// ---------------------------------------------------------------------------
-const UP = new THREE.Vector3(0, 1, 0);
-const v = () => new THREE.Vector3();
-
-/** Rumbo del cuerpo (yaw) a partir de caderas + hombros: adelante = arriba × derecha. */
-function heading(p: Pose): number {
-  const right = v().subVectors(p.RightUpLeg, p.LeftUpLeg).add(v().subVectors(p.RightArm, p.LeftArm));
-  right.y = 0;
-  const fwd = v().crossVectors(UP, right).normalize();
-  return Math.atan2(fwd.x, fwd.z);
-}
-
-/** Pasa la pose a espacio del cuerpo: caderas en el origen XZ, mirando a +Z. */
-function toBodySpace(frames: Pose[]): Pose[] {
-  const yaws = frames.map(heading);
-  // Rumbo suavizado (desenrollado) para conservar el balanceo de caderas.
-  for (let i = 1; i < yaws.length; i++) {
-    while (yaws[i]! - yaws[i - 1]! > Math.PI) yaws[i]! -= 2 * Math.PI;
-    while (yaws[i]! - yaws[i - 1]! < -Math.PI) yaws[i]! += 2 * Math.PI;
-  }
-  const W = 5;
-  return frames.map((p, i) => {
-    let sum = 0;
-    let n = 0;
-    for (let k = Math.max(0, i - W); k <= Math.min(frames.length - 1, i + W); k++, n++) sum += yaws[k]!;
-    const q = new THREE.Quaternion().setFromAxisAngle(UP, -sum / n);
-    const origin = v().set(p.Hips.x, 0, p.Hips.z);
-    const out = {} as Pose;
-    for (const [k, pos] of Object.entries(p)) out[k as keyof Pose] = pos.clone().sub(origin).applyQuaternion(q);
-    return out;
-  });
-}
-
-/** Base ortonormal de un hueso que en reposo apunta a −Y; `hint` define hacia dónde mira su +Z. */
-function boneBasis(dir: THREE.Vector3, hint: THREE.Vector3): THREE.Quaternion {
-  const y = dir.clone().normalize().negate();
-  let z = hint.clone().addScaledVector(y, -hint.dot(y));
-  if (z.lengthSq() < 1e-6) z = v().set(0, 0, 1).addScaledVector(y, -y.z);
-  z.normalize();
-  const x = v().crossVectors(y, z).normalize();
-  z.crossVectors(x, y).normalize();
-  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
-}
-
-/** Base del tronco: Y = caderas→cuello, X = hombro derecho→izquierdo (izquierda anatómica = +X). */
-function torsoBasis(p: Pose): THREE.Quaternion {
-  const y = v().subVectors(p.Neck, p.Hips).normalize();
-  const x = v().subVectors(p.LeftArm, p.RightArm);
-  x.addScaledVector(y, -x.dot(y)).normalize();
-  const z = v().crossVectors(x, y).normalize();
-  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
-}
-
 /** Corrección del tronco: en la pose de calibración (T-pose del 06_15) el tronco debe quedar recto. */
 let torsoRestInv: THREE.Quaternion;
-
-interface Frame {
-  rootY: number;
-  q: THREE.Quaternion[];
-  /** Altura del balón (unidades del rig) o −1 si va pegado a la mano. */
-  ballY: number;
-  handY: number;
-}
-
-function retarget(p: Pose, standHipY: number): Frame {
-  const k = RIG_HIP_Y / standHipY;
-  const upper = torsoBasis(p).multiply(torsoRestInv);
-  const upperInv = upper.clone().invert();
-
-  const leg = (hip: THREE.Vector3, knee: THREE.Vector3, ankle: THREE.Vector3, toe: THREE.Vector3) => {
-    const toeDir = v().subVectors(toe, ankle);
-    const qThigh = boneBasis(v().subVectors(knee, hip), toeDir);
-    const qShin = boneBasis(v().subVectors(ankle, knee), toeDir);
-    return [qThigh, qThigh.clone().invert().multiply(qShin)];
-  };
-  const arm = (sh: THREE.Vector3, el: THREE.Vector3, wr: THREE.Vector3) => {
-    const upperDir = v().subVectors(el, sh);
-    const foreDir = v().subVectors(wr, el);
-    // El brazo "mira" hacia donde se dobla el antebrazo; si está recto, hacia delante del tronco.
-    const hint = foreDir.clone().addScaledVector(upperDir.clone().normalize(), -foreDir.dot(upperDir.clone().normalize()));
-    if (hint.lengthSq() < 1e-4) hint.set(0, 0, 1).applyQuaternion(upper);
-    const qArm = boneBasis(upperDir, hint);
-    const qFore = boneBasis(foreDir, hint);
-    return [upperInv.clone().multiply(qArm), qArm.clone().invert().multiply(qFore)];
-  };
-
-  const [hipL, kneeL] = leg(p.LeftUpLeg, p.LeftLeg, p.LeftFoot, p.LeftToeBase);
-  const [hipR, kneeR] = leg(p.RightUpLeg, p.RightLeg, p.RightFoot, p.RightToeBase);
-  const [shL, elL] = arm(p.LeftArm, p.LeftForeArm, p.LeftHand);
-  const [shR, elR] = arm(p.RightArm, p.RightForeArm, p.RightHand);
-  return {
-    rootY: (p.Hips.y - standHipY) * k,
-    q: [upper, hipL!, kneeL!, hipR!, kneeR!, shL!, elL!, shR!, elR!],
-    ballY: -1,
-    handY: p.RightHand.y * k,
-  };
-}
 
 /** Altura de cadera de pie ≈ muslo + espinilla + tobillo. */
 function standingHipY(s: Sampled): number {
@@ -227,7 +128,7 @@ const load = (file: string) => {
 };
 
 {
-  const calib = toBodySpace([load('06_15').frames[0]!])[0]!;
+  const calib = toBodySpace([load('06_15').frames[0]!]).body[0]!;
   torsoRestInv = torsoBasis(calib).invert();
 }
 
@@ -236,10 +137,10 @@ for (const spec of SPECS) {
   console.log(`· ${spec.name} ← ${spec.file} [${spec.from}–${spec.to} s]`);
   const s = load(spec.file);
   const stand = standingHipY(s);
-  const body = toBodySpace(s.frames);
+  const { body } = toBodySpace(s.frames);
   const a = Math.round(spec.from * FPS);
   const b = Math.min(body.length - 1, Math.round(spec.to * FPS));
-  let frames = body.slice(a, b + 1).map((p) => retarget(p, stand));
+  let frames = body.slice(a, b + 1).map((p) => retargetPose(p, stand, torsoRestInv));
 
   // Velocidad media real del clip (m/s, escalada al rig) para sincronizar la reproducción.
   const k = RIG_HIP_Y / stand;
@@ -278,7 +179,7 @@ for (const spec of SPECS) {
   console.log(`  ${frames.length} frames`, extra);
 }
 
-mkdirSync(new URL('.', `file://${OUT}`).pathname, { recursive: true });
+mkdirSync(dirname(OUT), { recursive: true });
 writeFileSync(
   OUT,
   JSON.stringify({

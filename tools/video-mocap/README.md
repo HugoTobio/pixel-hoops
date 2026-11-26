@@ -35,9 +35,24 @@ Puntos MediaPipe: 11/12 hombros, 13/14 codos, 15/16 muñecas, 23/24 caderas, 25/
 - Ojo: parece una grabación de pantalla del vídeo de otra persona (rótulo "MOVE 1"). Vale para probar; para
   publicar, grabar el gesto uno mismo (cuerpo entero, de lado o en diagonal, buena luz, 60 fps).
 
+## Hornear y ver el prototipo
+
+```sh
+npx tsx tools/video-mocap/bake-pose.ts     # data/pivot-pose.json → apps/client/src/content/anims/pivot.json
+npm run dev                                 # http://localhost:5180/pivot.html
+```
+
+`bake-pose.ts` limpia (visibilidad < 0,5 fuera, mediana de 7 fotogramas, gaussiano), apoya el pie más bajo en el
+suelo, saca el salto de la imagen (subida de los tobillos en pantalla) y retargetea con `tools/mocap/retarget.ts`
+(el mismo código que los BVH de CMU). Guarda `pivot` (limpio) y `pivotRaw` (sin limpiar) + rumbo (`yaw`) y salto
+(`lift`) por fotograma, y el esqueleto de MediaPipe para comparar.
+
+`pivot.html` muestra el vídeo (`data/pivot.mp4`, fuera de git) sincronizado con el rig del juego y el esqueleto,
+con cámara orbital, velocidad, fotograma a fotograma y comparación limpio / sin limpiar.
+Para regenerar el mp4: `ffmpeg -i VIDEO.mov -vf scale=-2:540 -an -c:v libx264 -crf 25 -g 6 -pix_fmt yuv420p -movflags +faststart tools/video-mocap/data/pivot.mp4`
+
 ## Pendiente
 
-1. Suavizar (filtro tipo One-Euro o Savitzky-Golay), descartar puntos con visibilidad < 0,5 y saltos sueltos.
-2. Adaptar `tools/mocap/bake.ts` (ya retargetea por direcciones de hueso) para leer `pose.json` en lugar de BVH.
-3. Añadir el clip `pivot` (y quizá sustituir `shoot`) en `apps/client/src/content/anims/clips.json`.
-4. Decidir cuándo se ejecuta el pivote en el juego (¿botón nuevo o al cambiar bruscamente de dirección con balón?).
+1. Revisar el bote entre las piernas (fotogramas 74–83, tobillos cruzados) y la muñeca derecha tapada.
+2. El balón no se capta: hay que generarlo (como en `dribble`) o recortar el clip al giro.
+3. Pasar el pivote al juego y decidir cuándo se ejecuta (¿botón nuevo o al cambiar bruscamente de dirección con balón?).

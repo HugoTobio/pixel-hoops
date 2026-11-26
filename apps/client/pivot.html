@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <link rel="icon" href="data:," />
+    <title>Pixel Hoops · Prototipo pivote (mocap desde vídeo)</title>
+    <style>
+      :root {
+        --bg: #1b2433;
+        --panel: #141b27;
+        --line: #2c3a52;
+        --ui: #f4efe1;
+        --dim: #9aa6bb;
+        --accent: #f2c94c;
+        font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+        color: var(--ui);
+        background: var(--bg);
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; height: 100dvh; display: grid; grid-template-rows: auto 1fr auto; }
+      header { padding: 10px 14px; display: flex; gap: 14px; align-items: baseline; border-bottom: 1px solid var(--line); }
+      header h1 { margin: 0; font-size: 15px; letter-spacing: 0.08em; }
+      header p { margin: 0; font-size: 12px; color: var(--dim); }
+      main { display: grid; grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr); min-height: 0; }
+      main.no-video { grid-template-columns: 0 1fr; }
+      .pane { position: relative; min-height: 0; overflow: hidden; }
+      .pane + .pane { border-left: 1px solid var(--line); }
+      .tag { position: absolute; top: 8px; left: 8px; font-size: 11px; padding: 3px 7px; background: #0009; border-radius: 3px; pointer-events: none; }
+      video { width: 100%; height: 100%; object-fit: contain; background: #000; display: block; }
+      #view { width: 100%; height: 100%; display: block; image-rendering: pixelated; touch-action: none; }
+      #phase { position: absolute; bottom: 8px; left: 8px; font-size: 13px; color: var(--accent); pointer-events: none; }
+      footer { padding: 8px 14px 10px; border-top: 1px solid var(--line); background: var(--panel); display: grid; gap: 8px; }
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      button {
+        font: inherit; font-size: 12px; color: var(--ui); background: #24314a; border: 1px solid var(--line);
+        border-radius: 4px; padding: 6px 10px; cursor: pointer;
+      }
+      button[aria-pressed='true'] { background: var(--accent); color: #1b2433; border-color: var(--accent); }
+      button.play { min-width: 74px; font-weight: 700; }
+      input[type='range'] { flex: 1; accent-color: var(--accent); }
+      #time { font-size: 12px; color: var(--dim); min-width: 92px; text-align: right; font-variant-numeric: tabular-nums; }
+      .marks { position: relative; height: 14px; margin: 0 0 0 82px; margin-right: 100px; font-size: 10px; color: var(--dim); }
+      .marks span { position: absolute; transform: translateX(-50%); white-space: nowrap; cursor: pointer; }
+      .marks span::before { content: '▲ '; color: var(--accent); }
+      .sep { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
+      small { color: var(--dim); font-size: 11px; }
+      @media (max-aspect-ratio: 1/1) {
+        main { grid-template-columns: 1fr; grid-template-rows: 0.7fr 1.3fr; }
+        .pane + .pane { border-left: 0; border-top: 1px solid var(--line); }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>PIVOTE · MOCAP DESDE VÍDEO</h1>
+      <p>MediaPipe Pose → limpieza → retargeting al rig del juego. Arrastra en la vista 3D para girar la cámara.</p>
+    </header>
+    <main id="main">
+      <div class="pane">
+        <video id="video" muted playsinline preload="auto"></video>
+        <span class="tag">VÍDEO ORIGINAL</span>
+      </div>
+      <div class="pane">
+        <canvas id="view"></canvas>
+        <span class="tag" id="tag3d">RIG DEL JUEGO</span>
+        <span id="phase"></span>
+      </div>
+    </main>
+    <footer>
+      <div class="row">
+        <button class="play" id="play" type="button">▶ PLAY</button>
+        <input id="scrub" type="range" min="0" max="1000" value="0" step="1" aria-label="Tiempo" />
+        <span id="time">0,00 / 0,00 s</span>
+      </div>
+      <div class="marks" id="marks"></div>
+      <div class="row">
+        <small>Velocidad</small>
+        <button type="button" data-speed="0.25">¼×</button>
+        <button type="button" data-speed="0.5">½×</button>
+        <button type="button" data-speed="1" aria-pressed="true">1×</button>
+        <span class="sep"></span>
+        <button type="button" id="clean" aria-pressed="true">Limpio</button>
+        <button type="button" id="skel" aria-pressed="true">Esqueleto MediaPipe</button>
+        <button type="button" id="vid" aria-pressed="true">Vídeo</button>
+        <button type="button" id="px" aria-pressed="true">Pixel</button>
+        <span class="sep"></span>
+        <small>Cámara</small>
+        <button type="button" data-cam="video">Como el vídeo</button>
+        <button type="button" data-cam="tv">Retransmisión</button>
+        <button type="button" data-cam="top">Cenital</button>
+        <span class="sep"></span>
+        <small>←/→ fotograma · espacio play</small>
+      </div>
+    </footer>
+    <script type="module" src="/src/proto/pivot.ts"></script>
+  </body>
+</html>

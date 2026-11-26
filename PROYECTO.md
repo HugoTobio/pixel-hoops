@@ -70,7 +70,8 @@ con `npx vercel link` dentro de esa carpeta (proyecto **pixel-hoops**, equipo **
 | `audio/sfx.ts` | Pase, bote, canasta, aro, tablero, silbato |
 | `content/teams.ts` | Colores y dorsales de los equipos |
 | `tools/mocap/` | Herramientas para convertir mocap BVH de la CMU en clips |
-| `tools/video-mocap/` | Vídeo → postura con MediaPipe (en pruebas, ver su README) |
+| `tools/mocap/retarget.ts` | Retargeting común (BVH de CMU y vídeo) |
+| `tools/video-mocap/` | Vídeo → postura con MediaPipe → clip `pivot` (`bake-pose.ts`); prototipo en `/pivot.html` |
 | `tools/tests/` | Pruebas sin navegador (`npm test`) |
 
 ## Lo que ya funciona

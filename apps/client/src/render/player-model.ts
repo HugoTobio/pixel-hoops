@@ -116,6 +116,11 @@ export interface PlayerModel {
   /** Altura real del jugador en metros. */
   height: number;
   update(dt: number, s: AnimState): void;
+  /**
+   * Pone una pose concreta (p. ej. un clip de mocap reproducido desde fuera), sin las capas de update().
+   * Apoya el pie más bajo en el suelo y luego suma `lift` (salto, en metros).
+   */
+  applyPose(src: PoseBuf, facing: number, lift?: number): void;
   /** Posición del balón cuando este jugador lo tiene (mundo). */
   ballAnchor(out: THREE.Vector3): void;
   /** Cambia el color del aro bajo los pies (p. ej. al pasar a controlar a este jugador). */
@@ -363,6 +368,15 @@ export function createPlayerModel(look: PlayerLook, heightM: number, ringColor: 
       diff = Math.atan2(Math.sin(diff), Math.cos(diff));
       pivot.rotation.y += diff * Math.min(1, dt * 14);
       ring.scale.setScalar(1 - Math.min(0.4, Math.max(0, body.position.y)));
+    },
+    applyPose(src, facing, lift = 0) {
+      joints.forEach((j, i) => j.quaternion.copy(src.q[i]!));
+      body.position.y = src.rootY * scale;
+      pivot.rotation.y = facing;
+      body.updateMatrixWorld(true);
+      const footY = Math.min(legL.sole.getWorldPosition(v1).y, legR.sole.getWorldPosition(v2).y) - root.position.y;
+      body.position.y += lift - footY;
+      ring.scale.setScalar(1 - Math.min(0.4, Math.max(0, lift)));
     },
     setRing(color) {
       (ring.material as THREE.MeshBasicMaterial).color.setHex(color);

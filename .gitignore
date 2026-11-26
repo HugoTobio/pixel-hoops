@@ -5,3 +5,4 @@ dist
 .DS_Store
 tools/mocap/bvh/
 .deploy/
+tools/video-mocap/data/*.mp4
