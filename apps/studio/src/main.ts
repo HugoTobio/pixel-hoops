@@ -1,19 +1,27 @@
 /**
- * Estudio de mocap (local): vídeo → MediaPipe Pose en el navegador → balón → clip del juego.
- * Arrancar con `npm run studio` (abre http://localhost:5180/studio.html).
- * La parte que guarda en disco está en apps/client/studio-server.ts.
+ * Estudio de mocap (local, independiente del juego): vídeo → MediaPipe Pose en el navegador → balón →
+ * animación para el rig de referencia (@brawl/mocap). Arrancar con `npm run studio` (puerto 5190).
+ * La parte que guarda en disco está en apps/studio/studio-server.ts.
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
-import { lookFor } from '../content/teams';
-import { buildCourt } from '../render/court';
-import { createPlayerModel } from '../render/player-model';
-import { faceted, outlineMaterial, toonMaterial } from '../render/toon';
-import { detectBall } from '../mocap/ball-detect';
-import { bakeCapture, DEFAULT_EXAGGERATE, landmarksJson, MP, SKELETON_BONES, type Baked, type BallKey, type Capture, type CaptureFrame, type HandOverride } from '../mocap/capture';
-import { MocapClip } from '../mocap/clip';
+import {
+  bakeCapture,
+  DEFAULT_EXAGGERATE,
+  detectBall,
+  landmarksJson,
+  MocapClip,
+  MP,
+  SKELETON_BONES,
+  type Baked,
+  type BallKey,
+  type Capture,
+  type CaptureFrame,
+  type HandOverride,
+} from '@brawl/mocap';
+import { createMannequin } from './mannequin';
 
 declare const __MP_WASM__: string;
 
@@ -31,20 +39,27 @@ function status(text: string, kind: '' | 'ok' | 'bad' = '') {
   el.className = kind;
 }
 
-// --- Escena 3D (la misma luz y pista que el juego) ------------------------------------------
+// --- Escena 3D: neutra (suelo con cuadrícula), sin nada del juego ---------------------------
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.BasicShadowMap;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x1b2433);
-scene.add(buildCourt().group);
-scene.add(new THREE.HemisphereLight(0xdfe9ff, 0x5a4a3a, 1.5));
-const sun = new THREE.DirectionalLight(0xfff1d6, 2.0);
-sun.position.set(-3, 11, 5);
+scene.background = new THREE.Color(0x1d222b);
+scene.fog = new THREE.Fog(0x1d222b, 14, 30);
+const floor = new THREE.Mesh(new THREE.CircleGeometry(30, 48), new THREE.MeshStandardMaterial({ color: 0x2a313d, roughness: 1 }));
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+scene.add(floor);
+const grid = new THREE.GridHelper(20, 40, 0x56627a, 0x384152); // cuadros de 0,5 m
+grid.position.y = 0.002;
+scene.add(grid);
+scene.add(new THREE.HemisphereLight(0xe6ecff, 0x30343c, 1.6));
+const sun = new THREE.DirectionalLight(0xffffff, 1.8);
+sun.position.set(-3, 9, 6);
 sun.castShadow = true;
 sun.shadow.mapSize.set(1024, 1024);
 Object.assign(sun.shadow.camera, { left: -4, right: 4, top: 5, bottom: -4, near: 1, far: 30 });
-sun.shadow.bias = -0.001;
+sun.shadow.bias = -0.0005;
 scene.add(sun);
 
 const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 200);
@@ -54,19 +69,16 @@ controls.minDistance = 2;
 controls.maxDistance = 25;
 controls.maxPolarAngle = Math.PI / 2 - 0.02;
 
-const player = createPlayerModel(lookFor('home', 1), 2.01, 0xf2c94c);
+// Maniquí con el rig de referencia (2,00 m).
+const player = createMannequin();
 player.root.visible = false;
 scene.add(player.root);
-const RIG = player.height / 2; // unidades del rig → metros
+const RIG_M = player.height / 2; // unidades del rig → metros
 
-// Balón como en el juego (se dibuja 1,6× el real).
+// Balón (del tamaño con que se ve en el juego: 1,6× el real).
 const BALL_R = 0.19;
-const ballGeo = faceted(new THREE.IcosahedronGeometry(BALL_R, 1));
-const ball = new THREE.Mesh(ballGeo, toonMaterial(0xe8742c));
+const ball = new THREE.Mesh(new THREE.IcosahedronGeometry(BALL_R, 2), new THREE.MeshStandardMaterial({ color: 0xe8742c, roughness: 0.8, flatShading: true }));
 ball.castShadow = true;
-const ballHull = new THREE.Mesh(ballGeo, outlineMaterial);
-ballHull.scale.setScalar(1.12);
-ball.add(ballHull);
 ball.visible = false;
 scene.add(ball);
 
@@ -104,7 +116,7 @@ const state = {
   clean: true,
   skeleton: false,
   overlay: true,
-  pixel: true,
+  pixel: false,
   playing: false,
   /** Inicio y fin del clip (segundos del vídeo): recorta lo analizado o marca qué analizar. */
   range: [0, 0] as [number, number],
@@ -112,6 +124,8 @@ const state = {
   cancel: false,
   dirty: false,
   editing: false,
+  /** Mostrar el desplazamiento por el suelo (por defecto no: anima en el sitio, como un bucle). */
+  travel: false,
   /** fps del vídeo medidos al abrirlo (antes de analizar); con captura mandan los de la captura. */
   videoFps: 30,
 };
@@ -149,7 +163,7 @@ async function refreshLibrary() {
     ...library.map((it) => {
       const li = document.createElement('li');
       li.className = it.name === state.name ? 'active' : '';
-      const tag = it.clip ? 'en el juego' : it.capture ? 'analizada' : it.video ? 'sin analizar' : 'sin vídeo';
+      const tag = it.clip ? 'clip guardado' : it.capture ? 'analizada' : it.video ? 'sin analizar' : 'sin vídeo';
       li.innerHTML = `<span></span><small>${tag}</small>`;
       li.firstElementChild!.textContent = it.name;
       li.onclick = () => void open(it.name);
@@ -196,12 +210,12 @@ async function open(name: string) {
   showSideForm(null);
   if (it.capture) {
     const cap = await api<Capture>(`capture/${name}`);
-    const draft = restoreDraft(cap);
+    const draft = await restoreDraft(cap);
     loadCapture(cap);
     if (draft) {
       state.dirty = true;
       const at = draft.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
-      status(`Recuperados los cambios sin guardar de las ${at} (${cap.ballKeys?.length ?? 0} keyframes, salto ×${fmt(cap.exaggerate.jump)}). Pulsa GUARDAR EN EL JUEGO para conservarlos.`, 'ok');
+      status(`Recuperados los cambios sin guardar de las ${at} (${cap.ballKeys?.length ?? 0} keyframes, salto ×${fmt(cap.exaggerate.jump)}). Pulsa GUARDAR CLIP para conservarlos.`, 'ok');
     } else status(`${name}: clip de ${state.baked!.world.length} fotogramas a ${fmt(cap.fps, 1)} fps · ${statsText()}`, 'ok');
   } else status(it.video ? `${name}: sin analizar. Marca el tramo (opcional) y pulsa ANALIZAR.` : `${name}: falta el vídeo.`);
   seek(state.range[0]);
@@ -249,52 +263,49 @@ function queueRebake() {
     rebake();
   });
 }
-function markDirty(msg = 'Cambios sin guardar: pulsa GUARDAR EN EL JUEGO.') {
+function markDirty(msg = 'Cambios sin guardar: pulsa GUARDAR CLIP.') {
   state.dirty = true;
   status(msg);
   queueDraft();
 }
 
 // --- Borrador automático -------------------------------------------------------------------
-// Lo editable de una captura se guarda al momento en el navegador: si la página se recarga
-// (o se cierra) sin GUARDAR, al volver a abrir la captura se recupera.
+// Lo editable de una captura se guarda al momento en disco (data/<nombre>/borrador.json): si la página se
+// recarga o se cierra sin GUARDAR, al volver a abrir la captura se recupera, en este u otro navegador.
 type Draft = Pick<Capture, 'ballKeys' | 'exaggerate' | 'feetLock' | 'trim'> & { at: number; analysis: string };
-const draftKey = (name: string) => `pixel-hoops-studio-draft:${name}`;
 /** Huella del análisis: el borrador solo vale para el mismo análisis. */
 const analysisId = (c: Capture) => `${c.range[0].toFixed(4)}|${c.range[1].toFixed(4)}|${c.fps.toFixed(3)}|${c.frames.length}`;
 let draftTimer = 0;
 function queueDraft() {
   clearTimeout(draftTimer);
-  draftTimer = window.setTimeout(saveDraft, 250);
+  draftTimer = window.setTimeout(() => void saveDraft(), 250);
 }
-function saveDraft() {
+async function saveDraft() {
   const c = state.capture;
   if (!c || !state.dirty) return;
   const d: Draft = { at: Date.now(), analysis: analysisId(c), ballKeys: c.ballKeys, exaggerate: c.exaggerate, feetLock: c.feetLock, trim: c.trim };
   try {
-    localStorage.setItem(draftKey(state.name), JSON.stringify(d));
+    await api(`draft/${state.name}`, { method: 'PUT', body: JSON.stringify(d) });
   } catch {
-    /* sin espacio: no pasa nada, solo no hay borrador */
+    /* sin servidor: no hay borrador, pero no se interrumpe el trabajo */
   }
 }
 function clearDraft(name = state.name) {
   clearTimeout(draftTimer);
-  localStorage.removeItem(draftKey(name));
+  if (name) void api(`draft/${name}`, { method: 'DELETE' }).catch(() => {});
 }
 /** Si hay un borrador de esta captura (del mismo análisis), lo aplica y devuelve cuándo se hizo. */
-function restoreDraft(c: Capture): Date | null {
-  const raw = localStorage.getItem(draftKey(c.name));
-  if (!raw) return null;
+async function restoreDraft(c: Capture): Promise<Date | null> {
   try {
-    const d = JSON.parse(raw) as Draft;
-    if (d.analysis !== analysisId(c)) return null;
+    const d = await api<Draft | null>(`draft/${c.name}`);
+    if (!d || d.analysis !== analysisId(c)) return null;
     c.ballKeys = d.ballKeys ?? [];
     c.exaggerate = d.exaggerate ?? c.exaggerate;
     c.feetLock = d.feetLock ?? true;
     c.trim = d.trim;
     return new Date(d.at);
   } catch {
-    return null;
+    return null; // no hay borrador
   }
 }
 
@@ -656,7 +667,7 @@ async function analyze() {
     clearDraft(); // el análisis nuevo ya lleva los keyframes y ajustes
     loadCapture(cap);
     await refreshLibrary();
-    status(`Analizado: ${frames.length} fotogramas a ${fmt(fps, 1)} fps · jugador en ${detected} · ${statsText()}. Ajusta y pulsa GUARDAR EN EL JUEGO.`, 'ok');
+    status(`Analizado: ${frames.length} fotogramas a ${fmt(fps, 1)} fps · jugador en ${detected} · ${statsText()}. Ajusta y pulsa GUARDAR CLIP.`, 'ok');
     seek(cap.range[0]);
   } catch (err) {
     status(`Error al analizar: ${(err as Error).message}`, 'bad');
@@ -825,8 +836,8 @@ gizmo.addEventListener('objectChange', () => {
   const b = state.baked;
   const i = bakedIndex(currentFrame());
   if (!b || i < 0) return;
-  const w = vA.copy(keyHandle.position).sub(player.root.position).multiplyScalar(1 / (b.scale * RIG));
-  setKey3D(b.worldToLocal(i, [w.x, w.y, w.z]));
+  const w = vA.copy(keyHandle.position).sub(player.root.position).multiplyScalar(1 / (b.scale * RIG_M));
+  setKey3D(state.travel ? b.worldToLocal(i, [w.x, w.y, w.z]) : [w.x, w.y, w.z]);
 });
 function jumpKey(dir: 1 | -1) {
   const keys = state.capture?.ballKeys ?? [];
@@ -918,7 +929,7 @@ function onSliders(user = true) {
   $('#ex-pose-v').textContent = `×${fmt(e.pose)}`;
   if (state.mocap) state.mocap.exaggerate = e;
   if (state.capture) state.capture.exaggerate = e;
-  if (user && state.capture) markDirty('Cambios sin guardar: pulsa GUARDAR EN EL JUEGO para que el juego use esta exageración.');
+  if (user && state.capture) markDirty('Cambios sin guardar: pulsa GUARDAR CLIP para que el clip lleve esta exageración.');
 }
 jumpIn.oninput = () => onSliders();
 poseIn.oninput = () => onSliders();
@@ -1121,7 +1132,7 @@ document.querySelectorAll<HTMLButtonElement>('[data-speed]').forEach((b) => {
     document.querySelectorAll('[data-speed]').forEach((o) => o.setAttribute('aria-pressed', String(o === b)));
   };
 });
-const toggle = (id: string, key: 'skeleton' | 'overlay' | 'pixel' | 'clean', after?: () => void) => {
+const toggle = (id: string, key: 'skeleton' | 'overlay' | 'pixel' | 'clean' | 'travel', after?: () => void) => {
   const b = $<HTMLButtonElement>(id);
   b.onclick = () => {
     state[key] = !state[key];
@@ -1130,6 +1141,10 @@ const toggle = (id: string, key: 'skeleton' | 'overlay' | 'pixel' | 'clean', aft
   };
 };
 toggle('#skel', 'skeleton');
+toggle('#travel', 'travel', () => {
+  // Al volver al sitio, la cámara vuelve a encuadrar al personaje.
+  if (!state.travel) setCam('video');
+});
 toggle('#ov', 'overlay');
 toggle('#px', 'pixel', resize);
 toggle('#clean', 'clean', () => {
@@ -1251,31 +1266,38 @@ function update3d(tc: number, f: number, fAbs = f) {
   if (!has) return;
   player.root.position.x = state.skeleton ? -0.75 : 0;
   skeleton.position.x = 0.75;
-  $('#tag3d').textContent = state.skeleton ? 'RIG DEL JUEGO  ·  ESQUELETO MEDIAPIPE' : 'RIG DEL JUEGO';
+  $('#tag3d').textContent = state.skeleton ? 'MANIQUÍ (RIG)  ·  ESQUELETO MEDIAPIPE' : 'MANIQUÍ (RIG)';
 
   const m = state.mocap!.sample(tc, sample);
-  // Pies clavados (mundo) = posición del jugador + objetivo del clip.
-  footL.copy(m.footL).multiplyScalar(RIG).add(player.root.position);
-  footR.copy(m.footR).multiplyScalar(RIG).add(player.root.position);
-  player.applyPose(m.pose, m.yaw, m.lift * RIG, {
-    offset: offset.copy(m.root).multiplyScalar(RIG),
+  // En el sitio (por defecto): se quita el desplazamiento de la raíz a todo (cuerpo, pies, balón,
+  // esqueleto) para ver bien el gesto y el bucle; el giro se mantiene.
+  const shift = vC.copy(m.root);
+  if (!state.travel) shift.set(0, 0, 0);
+  const drop = (q: THREE.Vector3) => (state.travel ? q : q.sub(m.root));
+  // Pies clavados (mundo) = posición del personaje + objetivo del clip.
+  footL.copy(drop(m.footL)).multiplyScalar(RIG_M).add(player.root.position);
+  footR.copy(drop(m.footR)).multiplyScalar(RIG_M).add(player.root.position);
+  player.applyPose(m.pose, m.yaw, m.lift * RIG_M, {
+    offset: offset.copy(shift).multiplyScalar(RIG_M),
     footL,
     footR,
     footWL: m.footWL,
     footWR: m.footWR,
   });
-  // La cámara acompaña al jugador cuando se desplaza (sin perder el ángulo que haya puesto el usuario).
+  // Si se desplaza, la cámara le acompaña (sin perder el ángulo que haya puesto el usuario).
   const body = vB.copy(offset).add(player.root.position).setY(0);
-  const move = vC.subVectors(body, lastBody);
+  const move = vA.subVectors(body, lastBody);
   if (move.lengthSq() < 4) {
     camera.position.add(move);
     controls.target.add(move);
   }
   lastBody.copy(body);
-  skeleton.position.set(0.75, 0, 0);
+  // El esqueleto de MediaPipe va en metros y con la raíz incluida.
+  const rootM = baked!.clip.root[f]!;
+  skeleton.position.set(0.75 - (state.travel ? 0 : rootM[0]! / baked!.scale), 0, state.travel ? 0 : -rootM[1]! / baked!.scale);
 
   // Balón: suelto donde se vio en el vídeo; en la mano, pegado a la palma del rig.
-  const free = vA.copy(m.ball).multiplyScalar(RIG).add(player.root.position);
+  const free = vA.copy(drop(m.ball)).multiplyScalar(RIG_M).add(player.root.position);
   const hold = Math.min(1, m.holdL + m.holdR);
   if (hold > 0.001) {
     player.palms(vB, vC);
@@ -1305,7 +1327,7 @@ function update3d(tc: number, f: number, fAbs = f) {
   const where = hold > 0.5 ? (m.holdL > m.holdR ? 'mano izq.' : 'mano der.') : 'suelto';
   const feet = [m.footWL > 0.5 ? 'izq.' : '', m.footWR > 0.5 ? 'der.' : ''].filter(Boolean).join(' + ') || 'ninguno';
   const out = bakedIndex(fAbs) < 0 ? ' · FUERA DEL CLIP (recortado)' : '';
-  $('#info').textContent = `fotograma ${f + 1}/${baked!.world.length}${out} · balón ${src ? seen : 'no visto'} (${where}) · salto ${Math.round(m.lift * RIG * 100)} cm · apoyo: ${feet}`;
+  $('#info').textContent = `fotograma ${f + 1}/${baked!.world.length}${out} · balón ${src ? seen : 'no visto'} (${where}) · salto ${Math.round(m.lift * RIG_M * 100)} cm · apoyo: ${feet}`;
 }
 
 /** Coloca el asa del keyframe (y sus flechas X/Y/Z) donde está el balón en este fotograma. */
@@ -1316,8 +1338,8 @@ function updateHandle(fAbs: number) {
   keyHandle.visible = gizmoHelper.visible = !!p;
   gizmo.enabled = !!p;
   if (!p || gizmo.dragging) return;
-  const w = b!.localToWorld(i, p);
-  keyHandle.position.set(w[0], w[1], w[2]).multiplyScalar(b!.scale * RIG).add(player.root.position);
+  const w = state.travel ? b!.localToWorld(i, p) : p; // en el sitio: sin la raíz
+  keyHandle.position.set(w[0], w[1], w[2]).multiplyScalar(b!.scale * RIG_M).add(player.root.position);
 }
 
 function frame() {
@@ -1348,8 +1370,9 @@ function frame() {
 }
 
 // --- Arranque ------------------------------------------------------------------------------
+// Los cambios sin guardar ya están en el borrador (en disco): solo se avisa si se está analizando.
 addEventListener('beforeunload', (e) => {
-  if (state.dirty || state.analyzing) e.preventDefault();
+  if (state.analyzing) e.preventDefault();
 });
 resize();
 requestAnimationFrame(frame);

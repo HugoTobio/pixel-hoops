@@ -1,7 +1,7 @@
 /**
  * Hornea clips de mocap (BVH de CMU) al esqueleto low poly del juego.
  *
- * El retargeting (direcciones de hueso → rotaciones del rig) está en apps/client/src/mocap/retarget.ts.
+ * El retargeting (direcciones de hueso → rotaciones del rig) está en packages/mocap/src/retarget.ts.
  *
  * Uso: npm run bake:mocap   (lee tools/mocap/bvh/*.bvh, escribe apps/client/src/content/anims/clips.json)
  */
@@ -9,7 +9,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
-import { retarget as retargetPose, RIG_HIP_Y, SLOTS, toBodySpace, torsoBasis, type Frame } from '../../apps/client/src/mocap/retarget';
+import { retarget as retargetPose, RIG_HIP_Y, SLOTS, toBodySpace, torsoBasis, type Frame } from '../../packages/mocap/src/index';
 import { sampleBvh, type Sampled } from './sample';
 
 const FPS = 30;

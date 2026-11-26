@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <link rel="icon" href="data:," />
-    <title>Pixel Hoops · Estudio de mocap</title>
+    <title>Estudio de mocap</title>
     <style>
       :root {
         --bg: #1b2433;
@@ -53,8 +53,8 @@
       .xyz { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--dim); }
       .xyz input { width: 62px; font: inherit; font-size: 12px; padding: 5px; background: #0f1520; color: var(--ui); border: 1px solid var(--line); border-radius: 4px; }
       .xyz input:disabled { opacity: 0.4; }
-      .side-actions { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
-      .side-actions button { padding: 6px 4px; }
+      .side-actions { display: grid; grid-template-columns: 1fr; gap: 6px; }
+      .side-actions button { text-align: left; }
       button.danger { background: #5a2430; border-color: #8a3444; }
       button.danger.primary { background: var(--bad); color: #1b2433; border-color: var(--bad); font-weight: 700; }
       #del-form label { display: flex; gap: 6px; align-items: flex-start; font-size: 11px; color: var(--dim); line-height: 1.35; }
@@ -126,9 +126,9 @@
       <div class="new">
         <label class="file">＋ Abrir vídeo…<input id="file" type="file" accept="video/mp4,video/quicktime,video/webm,.mov,.m4v" /></label>
         <div class="side-actions">
-          <button type="button" id="dup" disabled title="Copia esta captura (vídeo, análisis, keyframes y recorte) con otro nombre para sacar otro clip de otra sección">⧉ Duplicar</button>
-          <button type="button" id="ren" disabled title="Cambia el nombre de la captura (y de su clip del juego)">✎ Renombrar</button>
-          <button type="button" id="del" class="danger" disabled title="Mueve la captura a la papelera del estudio (se puede recuperar)">🗑 Eliminar</button>
+          <button type="button" id="dup" disabled title="Copia esta captura (vídeo, análisis, keyframes y recorte) con otro nombre para sacar otro clip de otra sección">⧉ Duplicar captura</button>
+          <button type="button" id="ren" disabled title="Cambia el nombre de la captura (y de su clip del juego)">✎ Renombrar captura</button>
+          <button type="button" id="del" class="danger" disabled title="Mueve la captura a la papelera del estudio (se puede recuperar)">🗑 Eliminar captura</button>
         </div>
         <form id="ren-form">
           <small>Nuevo nombre (también el de su clip del juego)</small>
@@ -207,7 +207,7 @@
         <button type="button" id="ex-reset">×1</button>
         <button type="button" id="feet" aria-pressed="true" title="Clava cada pie en el suelo mientras está apoyado; el cuerpo se desplaza sobre él">Pies fijos</button>
         <span class="sep"></span>
-        <button type="button" class="primary" id="save" disabled>GUARDAR EN EL JUEGO</button>
+        <button type="button" class="primary" id="save" disabled title="Guarda la captura y escribe el clip en apps/client/src/content/anims/&lt;nombre&gt;.json (carpeta de animaciones del juego)">GUARDAR CLIP</button>
         <button type="button" id="export" disabled title="Landmarks de MediaPipe limpios (antes del retargeting) a tools/video-mocap/data/&lt;nombre&gt;/landmarks.json y descarga">EXPORTAR LANDMARKS</button>
       </div>
       <div class="row">
@@ -236,8 +236,9 @@
         <span class="sep"></span>
         <button type="button" id="clean" aria-pressed="true">Limpio</button>
         <button type="button" id="skel" aria-pressed="false">Esqueleto 3D</button>
+        <button type="button" id="travel" aria-pressed="false" title="Apagado: anima en el sitio (mejor para ver bucles). Encendido: se desplaza por el suelo como en el vídeo">Desplazarse</button>
         <button type="button" id="ov" aria-pressed="true">Detección sobre vídeo</button>
-        <button type="button" id="px" aria-pressed="true">Pixel</button>
+        <button type="button" id="px" aria-pressed="false" title="Efecto pixelado (como en el juego)">Pixel</button>
         <span class="sep"></span>
         <small>Cámara</small>
         <button type="button" data-cam="video">Como el vídeo</button>
@@ -247,6 +248,6 @@
         <small>espacio play · ←/→ fotograma · I/O tramo · B editar balón</small>
       </div>
     </footer>
-    <script type="module" src="/src/studio/main.ts"></script>
+    <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

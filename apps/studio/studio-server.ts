@@ -1,17 +1,18 @@
 /**
- * Parte "servidor" del estudio de mocap: solo existe con `npm run dev` / `npm run studio` (nunca en la web
- * publicada). Guarda en disco lo que hace el estudio en el navegador:
+ * Parte "servidor" del estudio de mocap (apps/studio, `npm run studio`): solo existe en local.
+ * El estudio es independiente del juego; lo único que comparte es dónde deja los clips (ANIMS). Guarda en disco lo que hace el estudio en el navegador:
  *
  *   tools/video-mocap/data/<nombre>/video.<ext>     vídeo original (fuera de git)
  *   tools/video-mocap/data/<nombre>/capture.json    análisis de MediaPipe + balón + keyframes + exageración
  *   tools/video-mocap/data/<nombre>/landmarks.json  landmarks limpios exportados (fuera de git)
+ *   tools/video-mocap/data/<nombre>/borrador.json   cambios sin guardar (se recuperan al abrir)
  *   apps/client/src/content/anims/<nombre>.json     clip horneado que lee el juego
  *
  * También duplica capturas (vídeo clonado + captura) para sacar varios clips de un mismo vídeo, las renombra
  * (carpeta + clip del juego) y las elimina: eliminar las mueve a tools/video-mocap/data/.papelera/ (se pueden
  * recuperar moviendo la carpeta de vuelta).
  */
-import { constants, copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { constants, copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -185,6 +186,25 @@ export function studioServer(): Plugin {
             const clip = join(ANIMS, `${name}.json`);
             if (withClip && existsSync(clip)) renameSync(clip, join(bin, 'clip-del-juego.json'));
             return send(res, 200, { ok: true, bin: `tools/video-mocap/data/.papelera/${name}-${stamp}` });
+          }
+          if (kind === 'draft') {
+            const p = join(dir, 'borrador.json');
+            if (req.method === 'GET') {
+              if (!existsSync(p)) return send(res, 200, null); // sin borrador (no es un error)
+              res.setHeader('Content-Type', 'application/json; charset=utf-8');
+              return res.end(readFileSync(p));
+            }
+            if (req.method === 'PUT') {
+              const body = await readBody(req);
+              JSON.parse(body);
+              if (!existsSync(dir)) return send(res, 404, { error: `No existe la captura "${name}"` });
+              writeFileSync(p, body);
+              return send(res, 200, { ok: true });
+            }
+            if (req.method === 'DELETE') {
+              if (existsSync(p)) rmSync(p);
+              return send(res, 200, { ok: true });
+            }
           }
           if (kind === 'landmarks' && req.method === 'PUT') {
             const body = await readBody(req);

@@ -17,7 +17,7 @@
  *  6. Retargeting (retarget.ts) + rumbo (yaw) aparte, porque en un pivote el giro ES el movimiento.
  */
 import * as THREE from 'three';
-import { retarget, RIG_HIP_Y, SLOTS, toBodySpace, torsoBasis, type ArmHints, type Pose } from './retarget';
+import { retarget, RIG_HIP_Y, toBodySpace, torsoBasis, type ArmHints, type Pose } from './retarget';
 
 export interface CaptureFrame {
   /** Segundos desde el inicio del tramo analizado. */
@@ -727,4 +727,3 @@ export function landmarksJson(cap: Capture, baked: Baked) {
   };
 }
 
-export { SLOTS };

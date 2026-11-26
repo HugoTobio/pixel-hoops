@@ -40,10 +40,14 @@ Puntos MediaPipe: 11/12 hombros, 13/14 codos, 15/16 muñecas, 23/24 caderas, 25/
 ## Estudio de mocap (lo normal)
 
 ```sh
-npm run studio        # abre http://localhost:5180/studio.html
+npm run studio        # abre http://localhost:5190 (app propia, independiente del juego)
 ```
 
-Todo en local y en el navegador (MediaPipe Pose para web; sin Python):
+Todo en local y en el navegador (MediaPipe Pose para web; sin Python). El estudio es una aplicación aparte
+(`apps/studio`) con su propio maniquí sobre un suelo con cuadrícula: no usa nada del juego. Por defecto el
+personaje anima **en el sitio** (conserva el giro, no se desplaza), para ver bien los gestos y los bucles;
+**Desplazarse** enseña el desplazamiento por el suelo. Lo común con el juego está en `packages/mocap`
+(formato de pose y clips, medidas del rig, retargeting, captura, cinemática inversa, detección del balón).
 
 1. **＋ Abrir vídeo…** (o arrastrarlo) y ponerle nombre → se copia a `data/<nombre>/video.<ext>` (fuera de git).
    **Línea de tiempo**: el cabezal se ajusta a fotogramas exactos y su etiqueta dice en qué fotograma estás
@@ -72,10 +76,12 @@ Todo en local y en el navegador (MediaPipe Pose para web; sin Python):
    Cada keyframe puede forzar la mano (automática / izquierda / derecha / suelto). `,` `.` saltan entre
    keyframes y Supr borra el del fotograma actual. Sobre el vídeo: amarillo discontinuo = detectado, verde =
    corregido (relleno = keyframe). Los keyframes se guardan en `capture.json` (no hace falta volver a analizar).
-7. **GUARDAR EN EL JUEGO** → `apps/client/src/content/anims/<nombre>.json` (con la exageración elegida).
+7. **GUARDAR CLIP** → `apps/client/src/content/anims/<nombre>.json` (con la exageración elegida). Ojo: el juego
+   solo usa los clips que carga `apps/client/src/render/anim.ts` (hoy `clips.json` y `dribble-run.json`).
 8. **EXPORTAR LANDMARKS** → `data/<nombre>/landmarks.json` (y se descarga). Ver formato abajo.
-Lo que se edita (keyframes, recorte, pies, exageración) se guarda al momento como **borrador** en el navegador:
-si la página se recarga o se cierra sin GUARDAR, al volver a abrir la captura se recupera (lo dice arriba).
+Lo que se edita (keyframes, recorte, pies, exageración) se guarda al momento como **borrador** en disco
+(`data/<nombre>/borrador.json`, fuera de git): si la página se recarga o se cierra sin guardar, al volver a abrir
+la captura se recupera (lo dice arriba), en cualquier navegador.
 
 9. **⧉ Duplicar captura** (barra lateral): copia vídeo (clon APFS, sin ocupar espacio extra), análisis,
    keyframes, recorte y exageración con otro nombre, para sacar otro clip de otra sección del mismo vídeo.
@@ -121,10 +127,10 @@ La "detección sobre vídeo" dibuja el esqueleto y un círculo amarillo donde se
 se va a otra cosa, ese tramo saldrá mal. El modelo (`models/pose_landmarker_heavy.task`, 30 MB) se descarga solo
 la primera vez.
 
-Código: `apps/client/studio.html` + `src/studio/main.ts` (interfaz), `studio-server.ts` (guardar en disco; solo
-existe en `npm run dev`, nunca en la web publicada), `src/mocap/capture.ts` (captura → clip: limpieza, suelo,
-salto medido en la imagen, balón en la mano o suelto), `src/mocap/clip.ts` (reproducir con exageración; lo usará
-el juego), `src/mocap/retarget.ts` (común con los BVH de CMU).
+Código: `apps/studio/index.html` + `src/main.ts` (interfaz), `src/mannequin.ts` (maniquí con el rig de
+referencia), `studio-server.ts` (guardar en disco; solo en local). En `packages/mocap/src`: `capture.ts` (captura →
+clip: limpieza, suelo, salto, pies fijos, brazos, balón), `clip.ts` (reproducir con exageración), `retarget.ts`
+(común con los BVH de CMU), `rig.ts` (medidas del rig), `pose.ts` (formato de pose y clips), `ik.ts`.
 
 ## Pendiente
 

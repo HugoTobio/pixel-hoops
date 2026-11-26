@@ -16,7 +16,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
-import { bakeCapture, type Capture } from '../../apps/client/src/mocap/capture';
+import { bakeCapture, type Capture } from '../../packages/mocap/src/index';
 
 const [name, out, ...rest] = process.argv.slice(2);
 if (!name || !out) {

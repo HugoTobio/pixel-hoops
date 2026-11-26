@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { PlayerLook } from '../content/teams';
+import { solveTwoBone } from '@brawl/mocap';
 import { CLIPS, DRIBBLE_RUN_BALL, idlePose, LOWER, PoseBuf, UPPER } from './anim';
 import { faceted, outlineMaterial, toonMaterial } from './toon';
 
@@ -264,42 +265,10 @@ export function createPlayerModel(look: PlayerLook, heightM: number, ringColor: 
   const v1 = new THREE.Vector3();
   const v2 = new THREE.Vector3();
 
-  // --- Cinemática inversa de dos huesos (cadera → rodilla → suela) ---
-  const ik = Array.from({ length: 8 }, () => new THREE.Vector3());
-  const qa = new THREE.Quaternion();
-  const qb = new THREE.Quaternion();
-  /** Gira `bone` (en el mundo) lo justo para que la dirección `from` pase a ser `to`. */
-  const turnBone = (bone: THREE.Object3D, from: THREE.Vector3, to: THREE.Vector3) => {
-    qa.setFromUnitVectors(from.normalize(), to.normalize());
-    bone.getWorldQuaternion(qb);
-    qb.premultiply(qa);
-    bone.parent!.getWorldQuaternion(qa);
-    bone.quaternion.copy(qa.invert().multiply(qb));
-    bone.updateMatrixWorld(true);
-  };
-  /** Lleva la suela de la pierna hacia `target` (mundo) con peso w, conservando hacia dónde dobla la rodilla. */
-  const solveLeg = (leg: { hip: THREE.Object3D; knee: THREE.Object3D; sole: THREE.Object3D }, target: THREE.Vector3, w: number) => {
-    const [H, K, S, T, dir, pole, nk, tmp] = ik as [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3];
-    leg.hip.getWorldPosition(H);
-    leg.knee.getWorldPosition(K);
-    leg.sole.getWorldPosition(S);
-    const l1 = H.distanceTo(K);
-    const l2 = K.distanceTo(S);
-    T.copy(S).lerp(target, Math.min(1, w));
-    dir.subVectors(T, H);
-    const d = THREE.MathUtils.clamp(dir.length(), Math.abs(l1 - l2) + 1e-3, (l1 + l2) * 0.999);
-    dir.normalize();
-    pole.subVectors(K, H).addScaledVector(dir, -tmp.subVectors(K, H).dot(dir));
-    if (pole.lengthSq() < 1e-8) pole.set(Math.sin(pivot.rotation.y), 0, Math.cos(pivot.rotation.y));
-    pole.normalize();
-    const a = (l1 * l1 - l2 * l2 + d * d) / (2 * d);
-    const h = Math.sqrt(Math.max(0, l1 * l1 - a * a));
-    nk.copy(H).addScaledVector(dir, a).addScaledVector(pole, h);
-    turnBone(leg.hip, tmp.subVectors(K, H), nk.sub(H));
-    leg.knee.getWorldPosition(K);
-    leg.sole.getWorldPosition(S);
-    turnBone(leg.knee, tmp.subVectors(S, K), T.sub(K));
-  };
+  /** Lleva la suela de la pierna a `target` (mundo) con peso w (cinemática inversa común, @brawl/mocap). */
+  const legPole = new THREE.Vector3();
+  const solveLeg = (leg: { hip: THREE.Object3D; knee: THREE.Object3D; sole: THREE.Object3D }, target: THREE.Vector3, w: number) =>
+    solveTwoBone(leg.hip, leg.knee, leg.sole, target, w, legPole.set(Math.sin(pivot.rotation.y), 0, Math.cos(pivot.rotation.y)));
 
   let t = Math.random() * 10;
   let runT = Math.random();

@@ -7,9 +7,9 @@
   ],
   "scripts": {
     "dev": "npm run dev -w @brawl/client",
-    "studio": "npm run dev -w @brawl/client -- --open /studio.html",
+    "studio": "npm run dev -w @brawl/studio",
     "build": "npm run build -w @brawl/client",
-    "typecheck": "tsc -p packages/shared && tsc -p apps/client && tsc -p apps/server",
+    "typecheck": "tsc -p packages/shared && tsc -p packages/mocap && tsc -p apps/client && tsc -p apps/server && tsc -p apps/studio",
     "test": "for t in shots pass plays finish window match; do tsx tools/tests/$t.ts || exit 1; done && tsx tools/tests/ai.ts compas",
     "bake:mocap": "tsx tools/mocap/bake.ts",
     "bake:loop": "tsx tools/video-mocap/bake-loop.ts",

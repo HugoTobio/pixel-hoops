@@ -19,10 +19,10 @@ export const SOURCE_JOINTS = [
 ] as const;
 export type Pose = Record<(typeof SOURCE_JOINTS)[number], THREE.Vector3>;
 
-/** Altura de cadera del rig de referencia (jugador de 2,00 m), igual que en player-model.ts. */
-export const RIG_HIP_Y = 1.02;
+import { RIG } from './rig';
 
-export const SLOTS = ['upper', 'hipL', 'kneeL', 'hipR', 'kneeR', 'shL', 'elL', 'shR', 'elR'] as const;
+/** Altura de cadera del rig de referencia (ver rig.ts). */
+export const RIG_HIP_Y = RIG.hipY;
 
 export const UP = new THREE.Vector3(0, 1, 0);
 export const v = () => new THREE.Vector3();

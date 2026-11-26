@@ -8,7 +8,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
-import { bakeCapture, type Capture } from '../../apps/client/src/mocap/capture';
+import { bakeCapture, type Capture } from '../../packages/mocap/src/index';
 
 const name = process.argv[2] ?? 'pivot';
 const cap = JSON.parse(readFileSync(fileURLToPath(new URL(`./data/${name}/capture.json`, import.meta.url)), 'utf8')) as Capture;

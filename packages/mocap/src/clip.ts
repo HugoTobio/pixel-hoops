@@ -4,7 +4,7 @@
  *  - pose: cada articulación se aparta más (o menos) de la postura de reposo del juego.
  */
 import * as THREE from 'three';
-import { Clip, idlePose, PoseBuf } from '../render/anim';
+import { Clip, idlePose, PoseBuf } from './pose';
 import type { Exaggerate, MocapClipJson } from './capture';
 
 export interface MocapSample {

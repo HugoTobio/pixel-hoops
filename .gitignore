@@ -10,3 +10,4 @@ tools/video-mocap/models/
 .playwright-mcp/
 tools/video-mocap/data/*/landmarks.json
 tools/video-mocap/data/.papelera/
+tools/video-mocap/data/*/borrador*.json
