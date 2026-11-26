@@ -77,6 +77,8 @@ Todo en local y en el navegador (MediaPipe Pose para web; sin Python):
 Lo que se edita (keyframes, recorte, pies, exageración) se guarda al momento como **borrador** en el navegador:
 si la página se recarga o se cierra sin GUARDAR, al volver a abrir la captura se recupera (lo dice arriba).
 
+9. **⧉ Duplicar captura** (barra lateral): copia vídeo (clon APFS, sin ocupar espacio extra), análisis,
+   keyframes, recorte y exageración con otro nombre, para sacar otro clip de otra sección del mismo vídeo.
 10. **✎ Renombrar** cambia el nombre de la captura y de su clip del juego. **🗑 Eliminar** la mueve (con su clip
     del juego, si se marca) a `data/.papelera/<nombre>-<fecha>/`: para recuperarla, mover la carpeta de vuelta
     a `data/` (y `clip-del-juego.json` a `apps/client/src/content/anims/<nombre>.json`).
@@ -88,9 +90,6 @@ si la página se recarga o se cierra sin GUARDAR, al volver a abrir la captura s
   el codo claramente doblado, y no puede girar más rápido de ~540°/s;
 - la flexión del codo se limita a 150°.
 Para revisar una captura: `npx tsx tools/video-mocap/check-arms.ts <nombre>` (cuenta los tirones del codo).
-
-9. **⧉ Duplicar captura** (barra lateral): copia vídeo (clon APFS, sin ocupar espacio extra), análisis,
-   keyframes, recorte y exageración con otro nombre, para sacar otro clip de otra sección del mismo vídeo.
 
 ### Formato de `landmarks.json` (landmarks limpios, antes del retargeting)
 
