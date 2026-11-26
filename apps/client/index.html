@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#1b2433" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <link rel="icon" href="data:," />
+    <title>Pixel Hoops</title>
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+
+    <div id="scoreboard">
+      <span class="team home">LOCAL</span>
+      <span id="score-home" class="pts">0</span>
+      <span class="sep">-</span>
+      <span id="score-away" class="pts">0</span>
+      <span class="team away">VISITANTE</span>
+    </div>
+
+    <button id="btn-reset" type="button" title="Recolocar y dar el balón (R)">↺ RESET</button>
+
+    <div id="debug">
+      <span id="stats"></span>
+      <button id="snd-btn" type="button" title="Sonido">♪</button>
+      <button id="px-btn" type="button">PX</button>
+    </div>
+
+    <div id="meter" aria-hidden="true">
+      <div id="meter-sweet"></div>
+      <div id="meter-fill"></div>
+    </div>
+    <div id="toast"></div>
+
+    <div id="buttons">
+      <button id="btn-pass" type="button">PASE</button>
+      <button id="btn-shoot" type="button">TIRO</button>
+    </div>
+
+    <div id="hint">Joystick: mitad izquierda · Mantén TIRO y suelta con la barra en la marca<br />Escritorio: WASD + mantener Espacio · N = pase/cortar · R = reset</div>
+
+    <div id="rotate">
+      <div>⟳</div>
+      <p>Gira el móvil para jugar</p>
+    </div>
+
+    <!-- Menú inicial, sala de espera online y cuenta atrás -->
+    <div id="overlay">
+      <section class="panel" id="panel-menu">
+        <h1>PIXEL<br />HOOPS</h1>
+        <p class="sub">Baloncesto 3 vs 3</p>
+        <button id="btn-hvb" class="big" type="button">HUMANO <small>vs</small> BOT</button>
+        <button id="btn-hvh" class="big alt" type="button">HUMANO <small>vs</small> HUMANO</button>
+      </section>
+
+      <section class="panel hidden" id="panel-invite">
+        <h2>¡TE HAN INVITADO!</h2>
+        <p>Partida</p>
+        <div class="code" id="invite-code">····</div>
+        <button id="btn-join" class="big alt" type="button">UNIRSE</button>
+        <button id="btn-invite-cancel" class="ghost" type="button">Volver al menú</button>
+      </section>
+
+      <section class="panel hidden" id="panel-lobby">
+        <h2 id="lobby-title">PARTIDA ONLINE</h2>
+        <div id="lobby-share">
+          <p>Comparte este enlace con tu rival:</p>
+          <div class="code" id="room-code">····</div>
+          <div class="link-row">
+            <input id="room-link" readonly />
+            <button id="btn-copy" type="button">COPIAR</button>
+          </div>
+        </div>
+        <p class="waiting"><span id="waiting-text">Esperando</span><span class="dots"><i>.</i><i>.</i><i>.</i></span></p>
+        <button id="btn-cancel" class="ghost" type="button">Cancelar</button>
+      </section>
+
+      <section class="panel hidden" id="panel-countdown">
+        <p class="notice" id="cd-notice">¡Rival conectado!</p>
+        <div class="clock"><span id="cd-num">5</span></div>
+        <p class="sub" id="cd-team"></p>
+      </section>
+
+      <section class="panel hidden" id="panel-error">
+        <h2>¡VAYA!</h2>
+        <p id="error-msg"></p>
+        <button id="btn-back" class="big" type="button">VOLVER</button>
+      </section>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "name": "brawl-pixel",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @brawl/client",
+    "build": "npm run build -w @brawl/client",
+    "typecheck": "tsc -p packages/shared && tsc -p apps/client && tsc -p apps/server",
+    "test": "for t in shots pass plays finish window match; do tsx tools/tests/$t.ts || exit 1; done && tsx tools/tests/ai.ts compas",
+    "bake:mocap": "tsx tools/mocap/bake.ts",
+    "dev:server": "npm run dev -w @brawl/server",
+    "dev:all": "npm run dev",
+    "deploy": "npm run build && rm -rf .deploy/pixel-hoops/assets .deploy/pixel-hoops/index.html && cp -R apps/client/dist/. .deploy/pixel-hoops/ && cd .deploy/pixel-hoops && npx -y vercel@latest deploy --prod --yes --scope hugo-hts-projects"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.15",
+    "typescript": "^5.6.3"
+  }
+}
