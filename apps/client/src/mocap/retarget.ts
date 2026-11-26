@@ -92,7 +92,20 @@ export interface Frame {
  * @param standHipY altura de cadera de pie en las unidades de la fuente (para escalar al rig).
  * @param torsoRestInv inversa de la base del tronco en la pose de calibración (tronco recto).
  */
-export function retarget(p: Pose, standHipY: number, torsoRestInv: THREE.Quaternion): Frame {
+/** Flexión máxima del codo (grados): más allá es un error de profundidad de la captura. */
+export const MAX_ELBOW_FLEX = 150;
+
+/**
+ * Hacia dónde se dobla cada antebrazo (perpendicular al brazo), en el espacio de la pose.
+ * Si se pasa (ya suavizado en el tiempo), manda sobre el cálculo de un solo fotograma, que con el
+ * brazo casi recto es inestable y hace que el codo "salte" de lado.
+ */
+export interface ArmHints {
+  L?: THREE.Vector3;
+  R?: THREE.Vector3;
+}
+
+export function retarget(p: Pose, standHipY: number, torsoRestInv: THREE.Quaternion, armHints?: ArmHints): Frame {
   const k = RIG_HIP_Y / standHipY;
   const upper = torsoBasis(p).multiply(torsoRestInv);
   const upperInv = upper.clone().invert();
@@ -103,12 +116,18 @@ export function retarget(p: Pose, standHipY: number, torsoRestInv: THREE.Quatern
     const qShin = boneBasis(v().subVectors(ankle, knee), toeDir);
     return [qThigh, qThigh.clone().invert().multiply(qShin)];
   };
-  const arm = (sh: THREE.Vector3, el: THREE.Vector3, wr: THREE.Vector3) => {
-    const upperDir = v().subVectors(el, sh);
-    const foreDir = v().subVectors(wr, el);
+  const arm = (sh: THREE.Vector3, el: THREE.Vector3, wr: THREE.Vector3, given?: THREE.Vector3) => {
+    const upperDir = v().subVectors(el, sh).normalize();
+    const foreDir = v().subVectors(wr, el).normalize();
     // El brazo "mira" hacia donde se dobla el antebrazo; si está recto, hacia delante del tronco.
-    const hint = foreDir.clone().addScaledVector(upperDir.clone().normalize(), -foreDir.dot(upperDir.clone().normalize()));
-    if (hint.lengthSq() < 1e-4) hint.set(0, 0, 1).applyQuaternion(upper);
+    let hint = given?.clone() ?? foreDir.clone().addScaledVector(upperDir, -foreDir.dot(upperDir));
+    hint.addScaledVector(upperDir, -hint.dot(upperDir));
+    if (hint.lengthSq() < 1e-4) hint = v().set(0, 0, 1).applyQuaternion(upper);
+    hint.normalize();
+    // Límite anatómico: el antebrazo no puede doblarse más de MAX_ELBOW_FLEX sobre el brazo.
+    const flex = upperDir.angleTo(foreDir);
+    const max = THREE.MathUtils.degToRad(MAX_ELBOW_FLEX);
+    if (flex > max) foreDir.copy(upperDir).multiplyScalar(Math.cos(max)).addScaledVector(hint, Math.sin(max)).normalize();
     const qArm = boneBasis(upperDir, hint);
     const qFore = boneBasis(foreDir, hint);
     return [upperInv.clone().multiply(qArm), qArm.clone().invert().multiply(qFore)];
@@ -116,8 +135,8 @@ export function retarget(p: Pose, standHipY: number, torsoRestInv: THREE.Quatern
 
   const [hipL, kneeL] = leg(p.LeftUpLeg, p.LeftLeg, p.LeftFoot, p.LeftToeBase);
   const [hipR, kneeR] = leg(p.RightUpLeg, p.RightLeg, p.RightFoot, p.RightToeBase);
-  const [shL, elL] = arm(p.LeftArm, p.LeftForeArm, p.LeftHand);
-  const [shR, elR] = arm(p.RightArm, p.RightForeArm, p.RightHand);
+  const [shL, elL] = arm(p.LeftArm, p.LeftForeArm, p.LeftHand, armHints?.L);
+  const [shR, elR] = arm(p.RightArm, p.RightForeArm, p.RightHand, armHints?.R);
   return {
     rootY: (p.Hips.y - standHipY) * k,
     q: [upper, hipL!, kneeL!, hipR!, kneeR!, shL!, elL!, shR!, elR!],

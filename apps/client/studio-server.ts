@@ -7,9 +7,11 @@
  *   tools/video-mocap/data/<nombre>/landmarks.json  landmarks limpios exportados (fuera de git)
  *   apps/client/src/content/anims/<nombre>.json     clip horneado que lee el juego
  *
- * También duplica capturas (vídeo clonado + captura) para sacar varios clips de un mismo vídeo.
+ * También duplica capturas (vídeo clonado + captura) para sacar varios clips de un mismo vídeo, las renombra
+ * (carpeta + clip del juego) y las elimina: eliminar las mueve a tools/video-mocap/data/.papelera/ (se pueden
+ * recuperar moviendo la carpeta de vuelta).
  */
-import { constants, copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { constants, copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -147,6 +149,42 @@ export function studioServer(): Plugin {
               writeFileSync(join(DATA, to, 'capture.json'), JSON.stringify(c));
             }
             return send(res, 200, { ok: true, name: to });
+          }
+          if (kind === 'rename' && req.method === 'POST') {
+            const to = String(JSON.parse((await readBody(req)) || '{}').to ?? '');
+            if (!validName(to)) return send(res, 400, { error: 'Nombre nuevo no válido: minúsculas, números, - y _ (máx. 41).' });
+            if (to === name) return send(res, 200, { ok: true, name: to });
+            if (!existsSync(dir)) return send(res, 404, { error: `No existe la captura "${name}"` });
+            if (existsSync(join(DATA, to)) || existsSync(join(ANIMS, `${to}.json`)))
+              return send(res, 409, { error: `Ya existe una captura o un clip llamado "${to}"` });
+            renameSync(dir, join(DATA, to));
+            const cap = join(DATA, to, 'capture.json');
+            if (existsSync(cap)) {
+              const c = JSON.parse(readFileSync(cap, 'utf8')) as { name: string };
+              c.name = to;
+              writeFileSync(cap, JSON.stringify(c));
+            }
+            // Su clip del juego cambia de nombre con ella.
+            const clip = join(ANIMS, `${name}.json`);
+            if (existsSync(clip)) {
+              const target = join(ANIMS, `${to}.json`);
+              renameSync(clip, target);
+              const c = JSON.parse(readFileSync(target, 'utf8')) as { source?: string };
+              if (c.source) c.source = c.source.replace(`: ${name}`, `: ${to}`);
+              writeFileSync(target, JSON.stringify(c));
+            }
+            return send(res, 200, { ok: true, name: to });
+          }
+          if (kind === 'delete' && req.method === 'POST') {
+            const withClip = !!JSON.parse((await readBody(req)) || '{}').clip;
+            if (!existsSync(dir)) return send(res, 404, { error: `No existe la captura "${name}"` });
+            const stamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-');
+            const bin = join(DATA, '.papelera', `${name}-${stamp}`);
+            mkdirSync(join(DATA, '.papelera'), { recursive: true });
+            renameSync(dir, bin);
+            const clip = join(ANIMS, `${name}.json`);
+            if (withClip && existsSync(clip)) renameSync(clip, join(bin, 'clip-del-juego.json'));
+            return send(res, 200, { ok: true, bin: `tools/video-mocap/data/.papelera/${name}-${stamp}` });
           }
           if (kind === 'landmarks' && req.method === 'PUT') {
             const body = await readBody(req);

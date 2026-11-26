@@ -53,8 +53,14 @@
       .xyz { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--dim); }
       .xyz input { width: 62px; font: inherit; font-size: 12px; padding: 5px; background: #0f1520; color: var(--ui); border: 1px solid var(--line); border-radius: 4px; }
       .xyz input:disabled { opacity: 0.4; }
-      #dup-form { display: none; gap: 6px; }
-      #dup-form.show { display: grid; }
+      .side-actions { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+      .side-actions button { padding: 6px 4px; }
+      button.danger { background: #5a2430; border-color: #8a3444; }
+      button.danger.primary { background: var(--bad); color: #1b2433; border-color: var(--bad); font-weight: 700; }
+      #del-form label { display: flex; gap: 6px; align-items: flex-start; font-size: 11px; color: var(--dim); line-height: 1.35; }
+      #dup-form, #ren-form, #del-form { display: none; gap: 6px; }
+      #dup-form.show, #ren-form.show, #del-form.show { display: grid; }
+      #ren-form input,
       #dup-form input { font: inherit; font-size: 12px; padding: 6px; background: #0f1520; color: var(--ui); border: 1px solid var(--line); border-radius: 4px; }
       select { font: inherit; font-size: 12px; color: var(--ui); background: #24314a; border: 1px solid var(--line); border-radius: 4px; padding: 5px 6px; }
       #view { width: 100%; height: 100%; display: block; image-rendering: pixelated; touch-action: none; }
@@ -119,7 +125,23 @@
       <ul id="library"></ul>
       <div class="new">
         <label class="file">＋ Abrir vídeo…<input id="file" type="file" accept="video/mp4,video/quicktime,video/webm,.mov,.m4v" /></label>
-        <button type="button" id="dup" disabled title="Copia esta captura (vídeo, análisis, keyframes y recorte) con otro nombre para sacar otro clip de otra sección">⧉ Duplicar captura</button>
+        <div class="side-actions">
+          <button type="button" id="dup" disabled title="Copia esta captura (vídeo, análisis, keyframes y recorte) con otro nombre para sacar otro clip de otra sección">⧉ Duplicar</button>
+          <button type="button" id="ren" disabled title="Cambia el nombre de la captura (y de su clip del juego)">✎ Renombrar</button>
+          <button type="button" id="del" class="danger" disabled title="Mueve la captura a la papelera del estudio (se puede recuperar)">🗑 Eliminar</button>
+        </div>
+        <form id="ren-form">
+          <small>Nuevo nombre (también el de su clip del juego)</small>
+          <input id="ren-name" required pattern="[a-z0-9][a-z0-9_\-]{0,40}" autocomplete="off" />
+          <button class="primary" type="submit">Renombrar</button>
+          <button type="button" id="ren-cancel">Cancelar</button>
+        </form>
+        <form id="del-form">
+          <small id="del-text"></small>
+          <label id="del-clip-row"><input type="checkbox" id="del-clip" checked /> <span id="del-clip-text"></span></label>
+          <button class="danger primary" type="submit">Eliminar</button>
+          <button type="button" id="del-cancel">Cancelar</button>
+        </form>
         <form id="dup-form">
           <small>Nombre de la copia</small>
           <input id="dup-name" required pattern="[a-z0-9][a-z0-9_\-]{0,40}" autocomplete="off" />

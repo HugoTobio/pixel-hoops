@@ -191,6 +191,9 @@ async function open(name: string) {
       .catch(() => {});
   }
   $<HTMLButtonElement>('#dup').disabled = !it.video;
+  $<HTMLButtonElement>('#ren').disabled = false;
+  $<HTMLButtonElement>('#del').disabled = false;
+  showSideForm(null);
   if (it.capture) {
     const cap = await api<Capture>(`capture/${name}`);
     const draft = restoreDraft(cap);
@@ -360,13 +363,8 @@ $('#dup-cancel').onclick = () => $('#dup-form').classList.remove('show');
 $<HTMLFormElement>('#dup-form').onsubmit = async (e) => {
   e.preventDefault();
   const to = $<HTMLInputElement>('#dup-name').value.trim();
-  // Que la copia lleve los últimos cambios (solo la captura; el clip del juego no se toca).
-  if (state.dirty && state.capture) {
-    await api(`capture/${state.name}`, { method: 'PUT', body: JSON.stringify(state.capture) });
-    state.dirty = false;
-    clearDraft();
-  }
   try {
+    await saveCaptureOnly(); // que la copia lleve los últimos cambios
     await api(`duplicate/${state.name}`, { method: 'POST', body: JSON.stringify({ to }) });
     $('#dup-form').classList.remove('show');
     await refreshLibrary();
@@ -376,6 +374,91 @@ $<HTMLFormElement>('#dup-form').onsubmit = async (e) => {
     status(`No se pudo duplicar: ${(err as Error).message}`, 'bad');
   }
 };
+
+/** Guarda en disco los cambios pendientes de la captura (no el clip del juego). */
+async function saveCaptureOnly() {
+  if (!state.dirty || !state.capture) return;
+  await api(`capture/${state.name}`, { method: 'PUT', body: JSON.stringify(state.capture) });
+  state.dirty = false;
+  clearDraft();
+}
+const sideForms = ['#dup-form', '#ren-form', '#del-form'];
+function showSideForm(id: string | null) {
+  for (const f of sideForms) $(f).classList.toggle('show', f === id);
+}
+
+// --- Renombrar -------------------------------------------------------------------------------
+$('#ren').onclick = () => {
+  if (!state.name) return;
+  $<HTMLInputElement>('#ren-name').value = state.name;
+  showSideForm('#ren-form');
+  $<HTMLInputElement>('#ren-name').select();
+};
+$('#ren-cancel').onclick = () => showSideForm(null);
+$<HTMLFormElement>('#ren-form').onsubmit = async (e) => {
+  e.preventDefault();
+  const from = state.name;
+  const to = $<HTMLInputElement>('#ren-name').value.trim();
+  if (!from || to === from) return showSideForm(null);
+  try {
+    await saveCaptureOnly(); // los cambios pendientes viajan con ella
+    await api(`rename/${from}`, { method: 'POST', body: JSON.stringify({ to }) });
+    showSideForm(null);
+    await refreshLibrary();
+    await open(to);
+    status(`Renombrada: ${from} → ${to}${library.find((i) => i.name === to)?.clip ? ` (su clip del juego ahora es ${to}.json)` : ''}.`, 'ok');
+  } catch (err) {
+    status(`No se pudo renombrar: ${(err as Error).message}`, 'bad');
+  }
+};
+
+// --- Eliminar --------------------------------------------------------------------------------
+$('#del').onclick = () => {
+  if (!state.name) return;
+  const it = library.find((i) => i.name === state.name);
+  $('#del-text').textContent = `¿Eliminar «${state.name}»? Se mueve a tools/video-mocap/data/.papelera/ (se puede recuperar).`;
+  $('#del-clip-row').style.display = it?.clip ? '' : 'none';
+  $<HTMLInputElement>('#del-clip').checked = true;
+  $('#del-clip-text').textContent = `Quitar también su clip del juego (${state.name}.json)`;
+  showSideForm('#del-form');
+};
+$('#del-cancel').onclick = () => showSideForm(null);
+$<HTMLFormElement>('#del-form').onsubmit = async (e) => {
+  e.preventDefault();
+  const name = state.name;
+  if (!name) return;
+  const clip = $<HTMLInputElement>('#del-clip').checked && !!library.find((i) => i.name === name)?.clip;
+  try {
+    const r = await api<{ bin: string }>(`delete/${name}`, { method: 'POST', body: JSON.stringify({ clip }) });
+    clearDraft(name);
+    state.dirty = false;
+    showSideForm(null);
+    await refreshLibrary();
+    if (library[0]) await open(library[0].name);
+    else closeCapture();
+    status(`«${name}» eliminada${clip ? ' (con su clip del juego)' : ''}. Está en ${r.bin} por si la necesitas.`, 'ok');
+  } catch (err) {
+    status(`No se pudo eliminar: ${(err as Error).message}`, 'bad');
+  }
+};
+
+/** Sin ninguna captura abierta. */
+function closeCapture() {
+  setPlaying(false);
+  setEditing(false);
+  state.name = '';
+  state.capture = null;
+  state.baked = state.bakedRaw = null;
+  state.mocap = null;
+  video.removeAttribute('src');
+  video.load();
+  for (const id of ['#dup', '#ren', '#del', '#save', '#export']) $<HTMLButtonElement>(id).disabled = true;
+  history.replaceState(null, '', location.pathname);
+  renderKeys();
+  updateRangeUi();
+  drawOverlay(null);
+  status('No hay capturas: abre un vídeo para empezar.');
+}
 
 addEventListener('dragover', (e) => {
   e.preventDefault();

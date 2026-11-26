@@ -17,7 +17,7 @@
  *  6. Retargeting (retarget.ts) + rumbo (yaw) aparte, porque en un pivote el giro ES el movimiento.
  */
 import * as THREE from 'three';
-import { retarget, RIG_HIP_Y, SLOTS, toBodySpace, type Pose } from './retarget';
+import { retarget, RIG_HIP_Y, SLOTS, toBodySpace, torsoBasis, type ArmHints, type Pose } from './retarget';
 
 export interface CaptureFrame {
   /** Segundos desde el inicio del tramo analizado. */
@@ -284,8 +284,9 @@ export function bakeCapture(full: Capture, clean = true): Baked {
     const filled = fillGaps(raw) as THREE.Vector3[];
     return clean ? gaussV(median(filled, (CLEANING.medianFrames - 1) / 2), CLEANING.gaussSigmaFrames) : filled;
   });
-  const P = (j: number, i: number) => tracks[j]![i]!;
   const visibility = cap.frames.map((f) => Array.from({ length: 33 }, (_, j) => f.w?.[j]?.[3] ?? 0));
+  if (clean) keepArmLengths(tracks, visibility);
+  const P = (j: number, i: number) => tracks[j]![i]!;
 
   // --- 3. Escala, suelo y salto ---
   const legLen = sortedMedian(
@@ -531,8 +532,9 @@ export function bakeCapture(full: Capture, clean = true): Baked {
     };
   });
   const { body, yaw } = toBodySpace(poses, clean ? 3 : 0);
+  const armHints = clean ? smoothArmHints(body, cap.fps) : [];
   // Con el tronco recto la base del tronco ya coincide con la del rig: sin corrección.
-  const frames = body.map((p) => retarget(p, standHipY, new THREE.Quaternion()));
+  const frames = body.map((p, i) => retarget(p, standHipY, new THREE.Quaternion(), armHints[i]));
   const k = RIG_HIP_Y / standHipY;
 
   const r = (x: number) => Math.round(x * 1000) / 1000;
@@ -579,6 +581,121 @@ export function bakeCapture(full: Capture, clean = true): Baked {
       travel: Math.hypot(rx[N - 1]! - rx[0]!, rz[N - 1]! - rz[0]!),
     },
   };
+}
+
+/**
+ * Longitud constante de brazo y antebrazo. Cuando el brazo queda tapado por el cuerpo, MediaPipe lo
+ * "aplasta" (huesos de la mitad de largo) y su dirección se vuelve ruido: el codo da tirones.
+ * La longitud real se mide donde el brazo se ve bien; en cada fotograma se conserva lo que se ve en la
+ * imagen (x, y) y se recupera la profundidad (z) que falta, sin cambiar de golpe si va por delante o por
+ * detrás. La mano (dedos) acompaña a la muñeca.
+ */
+function keepArmLengths(tracks: THREE.Vector3[][], vis: number[][]): void {
+  const N = tracks[0]!.length;
+  const chains = [
+    { sh: MP.shL, el: MP.elL, wr: MP.wrL, hand: [17, 19, 21] },
+    { sh: MP.shR, el: MP.elR, wr: MP.wrR, hand: [18, 20, 22] },
+  ];
+  const refLength = (a: number, b: number) => {
+    const sure: number[] = [];
+    const all: number[] = [];
+    for (let i = 0; i < N; i++) {
+      const d = tracks[a]![i]!.distanceTo(tracks[b]![i]!);
+      all.push(d);
+      if (vis[i]![a]! > 0.7 && vis[i]![b]! > 0.7) sure.push(d);
+    }
+    // La mediana de los fotogramas seguros (o de todos, si hay pocos); nunca la parte "aplastada".
+    return sortedMedian(sure.length >= 10 ? sure : all);
+  };
+  /**
+   * Acerca child a distancia L de parent; devuelve cuánto se ha movido. Gradual: nada si el hueso ya mide
+   * lo que debe, del todo si está aplastado por debajo del 80 % (así no hay saltos al cruzar un umbral).
+   * Delante/detrás: el de la captura si es claro (|z| > 5 cm); si no, el del fotograma anterior corregido.
+   */
+  const fit = (parent: THREE.Vector3, child: THREE.Vector3, L: number, sign: { z: number }) => {
+    const d = child.clone().sub(parent);
+    const len = d.length();
+    if (Math.abs(d.z) > 0.05) sign.z = Math.sign(d.z);
+    const w = 1 - THREE.MathUtils.smoothstep(len / L, 0.8, 1);
+    if (w > 0) {
+      const xy2 = d.x * d.x + d.y * d.y;
+      const full = xy2 >= L * L ? d.clone().setLength(L) : new THREE.Vector3(d.x, d.y, sign.z * Math.sqrt(L * L - xy2));
+      d.lerp(full, w);
+    }
+    if (Math.abs(d.z) > 0.01) sign.z = Math.sign(d.z);
+    const moved = parent.clone().add(d).sub(child);
+    child.add(moved);
+    return moved;
+  };
+  for (const c of chains) {
+    const L1 = refLength(c.sh, c.el);
+    const L2 = refLength(c.el, c.wr);
+    if (!Number.isFinite(L1) || !Number.isFinite(L2)) continue;
+    const s1 = { z: -1 };
+    const s2 = { z: -1 };
+    for (let i = 0; i < N; i++) {
+      const el = tracks[c.el]![i]!;
+      const wr = tracks[c.wr]![i]!;
+      const m1 = fit(tracks[c.sh]![i]!, el, L1, s1);
+      wr.add(m1);
+      for (const h of c.hand) tracks[h]![i]!.add(m1);
+      const m2 = fit(el, wr, L2, s2);
+      for (const h of c.hand) tracks[h]![i]!.add(m2);
+    }
+  }
+}
+
+/**
+ * Hacia dónde se dobla cada antebrazo, suavizado en el tiempo y medido respecto al tronco.
+ * Cada fotograma vota con un peso proporcional a lo doblado que está el codo: con el brazo casi recto
+ * (dirección indefinida) mandan los fotogramas vecinos y el codo no salta de lado.
+ */
+function smoothArmHints(body: Pose[], fps: number): ArmHints[] {
+  const sigma = Math.max(1, fps * 0.08);
+  const sides = [
+    ['LeftArm', 'LeftForeArm', 'LeftHand'],
+    ['RightArm', 'RightForeArm', 'RightHand'],
+  ] as const;
+  const torso = body.map((p) => torsoBasis(p));
+  const local = sides.map(([sh, el, wr]) =>
+    body.map((p, i) => {
+      const up = p[el].clone().sub(p[sh]).normalize();
+      const fore = p[wr].clone().sub(p[el]).normalize();
+      // Perpendicular al brazo, de longitud = seno del ángulo del codo (0 con el brazo recto).
+      const bend = fore.addScaledVector(up, -fore.dot(up));
+      return bend.multiplyScalar(bend.length()).applyQuaternion(torso[i]!.clone().invert());
+    }),
+  );
+  const smooth = local.map((vs) => {
+    const x = gauss(vs.map((q) => q.x), sigma);
+    const y = gauss(vs.map((q) => q.y), sigma);
+    const z = gauss(vs.map((q) => q.z), sigma);
+    return vs.map((_, i) => new THREE.Vector3(x[i], y[i], z[i]));
+  });
+  // Continuidad: con poca confianza (codo casi recto o doblado del todo, que es error de profundidad)
+  // se mantiene la dirección del fotograma anterior y solo se corrige en la medida de la confianza.
+  // Confianza plena a partir de sen²(25°) ≈ 0,18.
+  // Además, el codo no puede girar más rápido que ~540°/s (un tirón de la captura se reparte en varios fotogramas).
+  const maxStep = THREE.MathUtils.degToRad(540) / fps;
+  const rot = new THREE.Quaternion();
+  const steady = smooth.map((vs) => {
+    const firstSure = vs.find((q) => q.length() > 0.18);
+    let prev = firstSure ? firstSure.clone().normalize() : new THREE.Vector3(0, 0, 1);
+    return vs.map((q) => {
+      const len = q.length();
+      if (len > 1e-6) {
+        const target = prev.clone().lerp(q.clone().normalize(), Math.min(1, len / 0.18)).normalize();
+        const angle = prev.angleTo(target);
+        if (angle > maxStep) {
+          rot.setFromUnitVectors(prev, target);
+          target.copy(prev).applyQuaternion(new THREE.Quaternion().slerp(rot, maxStep / angle));
+        }
+        prev = target;
+      }
+      return prev.clone();
+    });
+  });
+  return body.map((_, i) => ({ L: steady[0]![i]!.clone().applyQuaternion(torso[i]!), R: steady[1]![i]!.clone().applyQuaternion(torso[i]!) }));
 }
 
 /** JSON de landmarks limpios (antes del retargeting), uno por clip. */
