@@ -121,6 +121,8 @@ export interface PlayerModel {
    * Apoya el pie más bajo en el suelo y luego suma `lift` (salto, en metros).
    */
   applyPose(src: PoseBuf, facing: number, lift?: number): void;
+  /** Posición (mundo) de las palmas izquierda y derecha. */
+  palms(outL: THREE.Vector3, outR: THREE.Vector3): void;
   /** Posición del balón cuando este jugador lo tiene (mundo). */
   ballAnchor(out: THREE.Vector3): void;
   /** Cambia el color del aro bajo los pies (p. ej. al pasar a controlar a este jugador). */
@@ -377,6 +379,10 @@ export function createPlayerModel(look: PlayerLook, heightM: number, ringColor: 
       const footY = Math.min(legL.sole.getWorldPosition(v1).y, legR.sole.getWorldPosition(v2).y) - root.position.y;
       body.position.y += lift - footY;
       ring.scale.setScalar(1 - Math.min(0.4, Math.max(0, lift)));
+    },
+    palms(outL, outR) {
+      armL.palm.getWorldPosition(outL);
+      armR.palm.getWorldPosition(outR);
     },
     setRing(color) {
       (ring.material as THREE.MeshBasicMaterial).color.setHex(color);

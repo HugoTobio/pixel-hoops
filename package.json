@@ -7,6 +7,7 @@
   ],
   "scripts": {
     "dev": "npm run dev -w @brawl/client",
+    "studio": "npm run dev -w @brawl/client -- --open /studio.html",
     "build": "npm run build -w @brawl/client",
     "typecheck": "tsc -p packages/shared && tsc -p apps/client && tsc -p apps/server",
     "test": "for t in shots pass plays finish window match; do tsx tools/tests/$t.ts || exit 1; done && tsx tools/tests/ai.ts compas",

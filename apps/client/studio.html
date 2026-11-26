@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <link rel="icon" href="data:," />
+    <title>Pixel Hoops · Estudio de mocap</title>
+    <style>
+      :root {
+        --bg: #1b2433;
+        --panel: #141b27;
+        --line: #2c3a52;
+        --ui: #f4efe1;
+        --dim: #9aa6bb;
+        --accent: #f2c94c;
+        --ok: #6fe3a0;
+        --bad: #ff8a7a;
+        font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+        color: var(--ui);
+        background: var(--bg);
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; height: 100dvh; display: grid; grid-template-columns: 230px 1fr; grid-template-rows: auto 1fr auto; }
+      header { grid-column: 1 / -1; padding: 9px 14px; display: flex; gap: 14px; align-items: baseline; border-bottom: 1px solid var(--line); }
+      header h1 { margin: 0; font-size: 15px; letter-spacing: 0.08em; white-space: nowrap; }
+      #status { font-size: 12px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      #status.bad { color: var(--bad); }
+      #status.ok { color: var(--ok); }
+
+      aside { grid-row: 2 / 4; border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+      aside h2 { font-size: 11px; letter-spacing: 0.1em; color: var(--dim); margin: 12px 12px 6px; font-weight: 600; }
+      #library { list-style: none; margin: 0; padding: 0 6px; overflow: auto; flex: 1; }
+      #library li { padding: 7px 8px; border-radius: 4px; cursor: pointer; font-size: 13px; display: flex; justify-content: space-between; gap: 6px; }
+      #library li:hover { background: #1f2a3d; }
+      #library li.active { background: #24314a; outline: 1px solid var(--accent); }
+      #library li small { color: var(--dim); font-size: 10px; white-space: nowrap; }
+      .new { padding: 10px 12px 12px; border-top: 1px solid var(--line); display: grid; gap: 8px; }
+      .new label.file { display: block; text-align: center; }
+      .new input[type='file'] { display: none; }
+      #new-form { display: none; gap: 6px; }
+      #new-form.show { display: grid; }
+      #new-form input { font: inherit; font-size: 12px; padding: 6px; background: #0f1520; color: var(--ui); border: 1px solid var(--line); border-radius: 4px; }
+      .hint { font-size: 11px; color: var(--dim); line-height: 1.4; }
+
+      main { display: grid; grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr); min-height: 0; }
+      .pane { position: relative; min-height: 0; overflow: hidden; }
+      .pane + .pane { border-left: 1px solid var(--line); }
+      .tag { position: absolute; top: 8px; left: 8px; font-size: 11px; padding: 3px 7px; background: #0009; border-radius: 3px; pointer-events: none; }
+      video { width: 100%; height: 100%; object-fit: contain; background: #000; display: block; }
+      #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+      #view { width: 100%; height: 100%; display: block; image-rendering: pixelated; touch-action: none; }
+      #info { position: absolute; bottom: 8px; left: 8px; font-size: 12px; color: var(--accent); pointer-events: none; }
+      #empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; color: var(--dim); font-size: 13px; padding: 20px; pointer-events: none; }
+      body.dragging main { outline: 3px dashed var(--accent); outline-offset: -6px; }
+
+      footer { grid-column: 2; padding: 8px 14px 10px; border-top: 1px solid var(--line); background: var(--panel); display: grid; gap: 8px; }
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      button, label.file {
+        font: inherit; font-size: 12px; color: var(--ui); background: #24314a; border: 1px solid var(--line);
+        border-radius: 4px; padding: 6px 10px; cursor: pointer;
+      }
+      button:disabled { opacity: 0.4; cursor: default; }
+      button[aria-pressed='true'] { background: var(--accent); color: #1b2433; border-color: var(--accent); }
+      button.primary { background: var(--accent); color: #1b2433; border-color: var(--accent); font-weight: 700; }
+      button.play { min-width: 74px; font-weight: 700; }
+      #scrub { flex: 1; accent-color: var(--accent); }
+      #time { font-size: 12px; color: var(--dim); min-width: 110px; text-align: right; font-variant-numeric: tabular-nums; }
+      .range-bar { position: relative; height: 6px; margin: -4px 124px 0 82px; background: #0f1520; border-radius: 3px; }
+      .range-bar div { position: absolute; top: 0; bottom: 0; background: var(--accent); opacity: 0.55; border-radius: 3px; }
+      .range-bar div.analyzed { background: var(--ok); opacity: 0.8; height: 3px; top: 3px; }
+      .sep { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
+      small { color: var(--dim); font-size: 11px; }
+      .slider { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+      .slider input { width: 150px; accent-color: var(--accent); }
+      .slider output { min-width: 44px; color: var(--accent); font-variant-numeric: tabular-nums; }
+      progress { width: 160px; accent-color: var(--accent); }
+      #progress-wrap { display: none; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); }
+      #progress-wrap.show { display: flex; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>ESTUDIO DE MOCAP</h1>
+      <span id="status">Elige una captura o abre un vídeo.</span>
+    </header>
+
+    <aside>
+      <h2>CAPTURAS</h2>
+      <ul id="library"></ul>
+      <div class="new">
+        <label class="file">＋ Abrir vídeo…<input id="file" type="file" accept="video/mp4,video/quicktime,video/webm,.mov,.m4v" /></label>
+        <form id="new-form">
+          <small>Nombre del clip (minúsculas, sin espacios)</small>
+          <input id="new-name" required pattern="[a-z0-9][a-z0-9_-]{0,40}" autocomplete="off" />
+          <button class="primary" type="submit">Crear captura</button>
+          <button type="button" id="new-cancel">Cancelar</button>
+        </form>
+        <p class="hint">También puedes arrastrar un vídeo aquí. Mejor: cuerpo entero, de lado o en diagonal, buena luz y balón naranja.</p>
+      </div>
+    </aside>
+
+    <main id="main">
+      <div class="pane">
+        <video id="video" muted playsinline preload="auto"></video>
+        <canvas id="overlay"></canvas>
+        <span class="tag">VÍDEO</span>
+      </div>
+      <div class="pane">
+        <canvas id="view"></canvas>
+        <span class="tag" id="tag3d">RIG DEL JUEGO</span>
+        <span id="info"></span>
+        <div id="empty">Sin analizar todavía.<br />Marca el tramo (opcional) y pulsa ANALIZAR.</div>
+      </div>
+    </main>
+
+    <footer>
+      <div class="row">
+        <button class="play" id="play" type="button">▶ PLAY</button>
+        <input id="scrub" type="range" min="0" max="10000" value="0" step="1" aria-label="Tiempo" />
+        <span id="time">0,00 / 0,00 s</span>
+      </div>
+      <div class="range-bar" title="Amarillo: tramo a analizar · verde: tramo analizado"><div id="bar-range"></div><div id="bar-done" class="analyzed"></div></div>
+      <div class="row">
+        <button type="button" id="mark-in" title="Tecla I">⇤ Inicio aquí</button>
+        <button type="button" id="mark-out" title="Tecla O">Fin aquí ⇥</button>
+        <button type="button" id="mark-reset">Todo el vídeo</button>
+        <small id="range-text"></small>
+        <span class="sep"></span>
+        <button type="button" class="primary" id="analyze">ANALIZAR</button>
+        <span id="progress-wrap"><progress id="progress" max="1" value="0"></progress><span id="progress-text"></span><button type="button" id="cancel">Parar</button></span>
+      </div>
+      <div class="row">
+        <label class="slider" title="Multiplica la altura del salto">Salto <input id="ex-jump" type="range" min="0" max="4" step="0.05" value="1" /><output id="ex-jump-v">×1,00</output></label>
+        <label class="slider" title="Cuánto se aparta cada articulación de la postura de reposo">Movimiento <input id="ex-pose" type="range" min="0" max="2.5" step="0.05" value="1" /><output id="ex-pose-v">×1,00</output></label>
+        <button type="button" id="ex-reset">×1</button>
+        <span class="sep"></span>
+        <button type="button" class="primary" id="save" disabled>GUARDAR EN EL JUEGO</button>
+      </div>
+      <div class="row">
+        <small>Velocidad</small>
+        <button type="button" data-speed="0.25">¼×</button>
+        <button type="button" data-speed="0.5">½×</button>
+        <button type="button" data-speed="1" aria-pressed="true">1×</button>
+        <span class="sep"></span>
+        <button type="button" id="clean" aria-pressed="true">Limpio</button>
+        <button type="button" id="skel" aria-pressed="false">Esqueleto 3D</button>
+        <button type="button" id="ov" aria-pressed="true">Detección sobre vídeo</button>
+        <button type="button" id="px" aria-pressed="true">Pixel</button>
+        <span class="sep"></span>
+        <small>Cámara</small>
+        <button type="button" data-cam="video">Como el vídeo</button>
+        <button type="button" data-cam="tv">Retransmisión</button>
+        <button type="button" data-cam="top">Cenital</button>
+        <span class="sep"></span>
+        <small>espacio play · ←/→ fotograma · I/O tramo</small>
+      </div>
+    </footer>
+    <script type="module" src="/src/studio/main.ts"></script>
+  </body>
+</html>

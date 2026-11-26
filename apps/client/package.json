@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@brawl/shared": "*",
+    "@mediapipe/tasks-vision": "^1.2.3",
     "peerjs": "^1.5.5",
     "three": "^0.170.0"
   },

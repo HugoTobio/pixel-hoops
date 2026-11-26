@@ -3,7 +3,9 @@
 Saca la postura del jugador fotograma a fotograma con **MediaPipe Pose** (Google, gratis, en local, sin cuenta).
 Probado el 2026-11-26 con el vídeo del pivote (`JUEGO BASKET/Grabación de pantalla 2026-11-26 a las 9.27.57.mov`).
 
-## Preparar (una vez)
+## Alternativa en Python (la primera prueba; ya no hace falta)
+
+### Preparar (una vez)
 
 ```sh
 python3.13 -m venv .mpenv && .mpenv/bin/pip install mediapipe opencv-python-headless
@@ -11,7 +13,7 @@ mkdir -p models && curl -sL -o models/pose_heavy.task \
   https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task
 ```
 
-## Usar
+### Usar
 
 ```sh
 .mpenv/bin/python -I tools/video-mocap/pose.py VIDEO.mov models/pose_heavy.task pose.json
@@ -35,24 +37,33 @@ Puntos MediaPipe: 11/12 hombros, 13/14 codos, 15/16 muñecas, 23/24 caderas, 25/
 - Ojo: parece una grabación de pantalla del vídeo de otra persona (rótulo "MOVE 1"). Vale para probar; para
   publicar, grabar el gesto uno mismo (cuerpo entero, de lado o en diagonal, buena luz, 60 fps).
 
-## Hornear y ver el prototipo
+## Estudio de mocap (lo normal)
 
 ```sh
-npx tsx tools/video-mocap/bake-pose.ts     # data/pivot-pose.json → apps/client/src/content/anims/pivot.json
-npm run dev                                 # http://localhost:5180/pivot.html
+npm run studio        # abre http://localhost:5180/studio.html
 ```
 
-`bake-pose.ts` limpia (visibilidad < 0,5 fuera, mediana de 7 fotogramas, gaussiano), apoya el pie más bajo en el
-suelo, saca el salto de la imagen (subida de los tobillos en pantalla) y retargetea con `tools/mocap/retarget.ts`
-(el mismo código que los BVH de CMU). Guarda `pivot` (limpio) y `pivotRaw` (sin limpiar) + rumbo (`yaw`) y salto
-(`lift`) por fotograma, y el esqueleto de MediaPipe para comparar.
+Todo en local y en el navegador (MediaPipe Pose para web; sin Python):
 
-`pivot.html` muestra el vídeo (`data/pivot.mp4`, fuera de git) sincronizado con el rig del juego y el esqueleto,
-con cámara orbital, velocidad, fotograma a fotograma y comparación limpio / sin limpiar.
-Para regenerar el mp4: `ffmpeg -i VIDEO.mov -vf scale=-2:540 -an -c:v libx264 -crf 25 -g 6 -pix_fmt yuv420p -movflags +faststart tools/video-mocap/data/pivot.mp4`
+1. **＋ Abrir vídeo…** (o arrastrarlo) y ponerle nombre → se copia a `data/<nombre>/video.<ext>` (fuera de git).
+2. Opcional: marcar el tramo con **Inicio aquí / Fin aquí** (teclas I / O).
+3. **ANALIZAR**: mide los fps del vídeo, saca la pose fotograma a fotograma y busca el balón
+   (`src/mocap/ball-detect.ts`: mancha naranja redonda del tamaño esperado; descarta cara, piel y zapatillas
+   naranjas y saltos imposibles). Se guarda en `data/<nombre>/capture.json`. Mientras analiza se puede seguir
+   tocando el reproductor: el análisis usa su propia copia del vídeo.
+4. Ajustar **Salto** (×0–4) y **Movimiento** (×0–2,5: cuánto se aparta cada articulación de la postura de reposo).
+5. **GUARDAR EN EL JUEGO** → `apps/client/src/content/anims/<nombre>.json` (con la exageración elegida).
+
+La "detección sobre vídeo" dibuja el esqueleto y un círculo amarillo donde se ha visto el balón: si el círculo
+se va a otra cosa, ese tramo saldrá mal. El modelo (`models/pose_landmarker_heavy.task`, 30 MB) se descarga solo
+la primera vez.
+
+Código: `apps/client/studio.html` + `src/studio/main.ts` (interfaz), `studio-server.ts` (guardar en disco; solo
+existe en `npm run dev`, nunca en la web publicada), `src/mocap/capture.ts` (captura → clip: limpieza, suelo,
+salto medido en la imagen, balón en la mano o suelto), `src/mocap/clip.ts` (reproducir con exageración; lo usará
+el juego), `src/mocap/retarget.ts` (común con los BVH de CMU).
 
 ## Pendiente
 
-1. Revisar el bote entre las piernas (fotogramas 74–83, tobillos cruzados) y la muñeca derecha tapada.
-2. El balón no se capta: hay que generarlo (como en `dribble`) o recortar el clip al giro.
-3. Pasar el pivote al juego y decidir cuándo se ejecuta (¿botón nuevo o al cambiar bruscamente de dirección con balón?).
+1. Meter el pivote en el juego y decidir cuándo se ejecuta (¿botón nuevo o al cambiar bruscamente de dirección con balón?).
+2. Si un vídeo da problemas con el balón: corregirlo a mano en el estudio (aún no existe).

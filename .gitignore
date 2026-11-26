@@ -5,4 +5,6 @@ dist
 .DS_Store
 tools/mocap/bvh/
 .deploy/
-tools/video-mocap/data/*.mp4
+tools/video-mocap/data/*/video.*
+tools/video-mocap/models/
+.playwright-mcp/

@@ -25,6 +25,7 @@ npm install
 npm run dev          # http://localhost:5180 (también abre en la red local para probar desde el móvil)
 npm test             # pruebas de la simulación sin navegador (tiros, IA, pases, jugadas, entradas, partido)
 npm run typecheck
+npm run studio       # estudio de mocap: vídeo → animación del juego (solo en local)
 npm run deploy       # compila y publica en https://pixel-hoops.vercel.app (Vercel, equipo hugo-hts-projects)
 ```
 
@@ -70,8 +71,9 @@ con `npx vercel link` dentro de esa carpeta (proyecto **pixel-hoops**, equipo **
 | `audio/sfx.ts` | Pase, bote, canasta, aro, tablero, silbato |
 | `content/teams.ts` | Colores y dorsales de los equipos |
 | `tools/mocap/` | Herramientas para convertir mocap BVH de la CMU en clips |
-| `tools/mocap/retarget.ts` | Retargeting común (BVH de CMU y vídeo) |
-| `tools/video-mocap/` | Vídeo → postura con MediaPipe → clip `pivot` (`bake-pose.ts`); prototipo en `/pivot.html` |
+| `apps/client/src/mocap/` | Captura desde vídeo → clip (`capture.ts`), detector de balón, reproducción con exageración (`clip.ts`), retargeting común con CMU |
+| `apps/client/studio.html`, `src/studio/`, `studio-server.ts` | **Estudio de mocap** local (`npm run studio`), ver `tools/video-mocap/README.md` |
+| `tools/video-mocap/` | Capturas (`data/<nombre>/`) y la primera prueba en Python |
 | `tools/tests/` | Pruebas sin navegador (`npm test`) |
 
 ## Lo que ya funciona

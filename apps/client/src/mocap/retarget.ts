@@ -1,6 +1,6 @@
 /**
- * Retargeting por direcciones de hueso, compartido por los BVH de CMU (bake.ts) y por la captura
- * desde vídeo (tools/video-mocap/bake-pose.ts).
+ * Retargeting por direcciones de hueso, compartido por los BVH de CMU (tools/mocap/bake.ts) y por la
+ * captura desde vídeo (estudio de mocap, src/mocap/capture.ts). Sin dependencias de Node: va en el navegador.
  *
  * De cada fotograma se toman las direcciones reales de los huesos (muslo, espinilla, brazo, antebrazo,
  * tronco) en el espacio del cuerpo (sin rumbo ni traslación) y se convierten en rotaciones locales de
@@ -8,7 +8,16 @@
  * de la fuente sean distintas.
  */
 import * as THREE from 'three';
-import type { Pose } from './sample';
+
+/** Articulaciones que necesita el retargeting (posiciones en metros, Y arriba). */
+export const SOURCE_JOINTS = [
+  'Hips', 'Neck',
+  'LeftUpLeg', 'LeftLeg', 'LeftFoot', 'LeftToeBase',
+  'RightUpLeg', 'RightLeg', 'RightFoot', 'RightToeBase',
+  'LeftArm', 'LeftForeArm', 'LeftHand',
+  'RightArm', 'RightForeArm', 'RightHand',
+] as const;
+export type Pose = Record<(typeof SOURCE_JOINTS)[number], THREE.Vector3>;
 
 /** Altura de cadera del rig de referencia (jugador de 2,00 m), igual que en player-model.ts. */
 export const RIG_HIP_Y = 1.02;
@@ -30,7 +39,7 @@ export function heading(p: Pose): number {
  * Pasa la pose a espacio del cuerpo: caderas en el origen XZ, mirando a +Z.
  * Devuelve también el rumbo suavizado y desenrollado de cada fotograma (radianes).
  */
-export function toBodySpace(frames: Pose[], window = 5): { body: Pose[]; yaw: number[] } {
+export function toBodySpace<T extends Pose>(frames: T[], window = 5): { body: T[]; yaw: number[] } {
   const yaws = frames.map(heading);
   for (let i = 1; i < yaws.length; i++) {
     while (yaws[i]! - yaws[i - 1]! > Math.PI) yaws[i]! -= 2 * Math.PI;
@@ -44,8 +53,8 @@ export function toBodySpace(frames: Pose[], window = 5): { body: Pose[]; yaw: nu
     yaw.push(sum / n);
     const q = new THREE.Quaternion().setFromAxisAngle(UP, -sum / n);
     const origin = v().set(p.Hips.x, 0, p.Hips.z);
-    const out = {} as Pose;
-    for (const [k, pos] of Object.entries(p)) out[k as keyof Pose] = pos.clone().sub(origin).applyQuaternion(q);
+    const out = {} as T;
+    for (const [k, pos] of Object.entries(p) as [keyof T, THREE.Vector3][]) (out[k] as THREE.Vector3) = pos.clone().sub(origin).applyQuaternion(q);
     return out;
   });
   return { body, yaw };
