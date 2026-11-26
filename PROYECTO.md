@@ -5,6 +5,8 @@ estética pixelada low poly (el "estilo Brawl Stars" es SOLO estético: colorido
 NO es un juego de peleas). Interfaz en español.
 
 - **Jugar:** https://pixel-hoops.vercel.app
+- **Código:** https://github.com/HugoTobio/pixel-hoops (privado; rama `main`). Los vídeos, capturas en curso, modelos
+  de MediaPipe y BVH de la CMU no se suben (ver `.gitignore`).
 - **Carpeta de trabajo (desde 2026-11-26):** Dropbox `/2026 HTS/CLAUDE/JUEGO BASKET/pixel-hoops`, con git (rama `main`).
   `~/brawl-pixel` es la copia antigua del Mac original; ya no se usa.
 - `node_modules`, `dist` y `.deploy` están marcados para que Dropbox no los sincronice
