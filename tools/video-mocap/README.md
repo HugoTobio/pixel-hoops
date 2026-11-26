@@ -83,6 +83,13 @@ si la página se recarga o se cierra sin GUARDAR, al volver a abrir la captura s
     del juego, si se marca) a `data/.papelera/<nombre>-<fecha>/`: para recuperarla, mover la carpeta de vuelta
     a `data/` (y `clip-del-juego.json` a `apps/client/src/content/anims/<nombre>.json`).
 
+**Bucles para el juego** (como `run`): `npm run bake:loop -- <captura> <clip>` convierte una captura en un bucle
+sin desplazamiento ni giro, con el mejor punto de cierre, la trayectoria del balón en el espacio del cuerpo y la
+velocidad de carrera medida en los apoyos (o `--speed m/s`). Ahora mismo: `bote-en-carrera` → `dribble-run.json`,
+que el juego usa al correr con el balón (`render/player-model.ts`: sustituye a carrera + bote de la CMU, al ritmo
+del jugador; el balón sigue la trayectoria capturada y se pega a la palma cuando va en la mano). Para un bucle
+limpio conviene grabar 2–3 s seguidos del gesto (con un solo ciclo, el cierre se nota más).
+
 **Brazos**: el codo se calcula con tres ayudas, porque es lo que más falla en la captura:
 - la longitud de brazo y antebrazo es constante (medida donde se ven bien); si el brazo queda tapado y
   MediaPipe lo "aplasta", se recupera la profundidad que falta;

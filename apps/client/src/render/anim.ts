@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import data from '../content/anims/clips.json';
+import dribbleRunData from '../content/anims/dribble-run.json';
 
 /**
  * Reproductor de clips horneados desde mocap (ver tools/mocap/bake.ts).
@@ -88,12 +89,40 @@ export class Clip {
   }
 }
 
+/**
+ * Trayectoria del balón de un bucle capturado desde vídeo, en el espacio del cuerpo (unidades del rig):
+ * x/z respecto a la cadera (mirando a +Z), y = altura sobre el suelo, y cuánto va en cada mano.
+ */
+export class BallLoop {
+  private readonly a = new THREE.Vector3();
+  constructor(
+    private readonly fps: number,
+    private readonly track: number[][],
+  ) {}
+  /** Devuelve en `out` la posición y en el resultado los pesos de mano [izq., der.]. */
+  sample(t: number, out: THREE.Vector3): [number, number] {
+    const n = this.track.length;
+    const f = (((t * this.fps) % n) + n) % n;
+    const i0 = Math.floor(f);
+    const i1 = (i0 + 1) % n;
+    const u = f - i0;
+    const A = this.track[i0]!;
+    const B = this.track[i1]!;
+    out.set(A[0]!, A[1]!, A[2]!).lerp(this.a.set(B[0]!, B[1]!, B[2]!), u);
+    return [A[3]! + (B[3]! - A[3]!) * u, A[4]! + (B[4]! - A[4]!) * u];
+  }
+}
+
 const clips = (data as unknown as { clips: Record<string, ClipJson> }).clips;
+const dribbleRun = dribbleRunData as unknown as ClipJson & { ball: number[][] };
 export const CLIPS = {
   dribble: new Clip(clips.dribble!),
   run: new Clip(clips.run!),
   shoot: new Clip(clips.shoot!),
+  /** Bote en carrera: bucle de cuerpo entero capturado desde vídeo (estudio, captura "bote-en-carrera"). */
+  dribbleRun: new Clip(dribbleRun),
 };
+export const DRIBBLE_RUN_BALL = new BallLoop(dribbleRun.fps, dribbleRun.ball);
 
 /** Pose de reposo (sin mocap): rodillas algo flexionadas y brazos relajados. */
 export function idlePose(out: PoseBuf, breath: number): PoseBuf {

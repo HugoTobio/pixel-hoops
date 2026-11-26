@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { PlayerLook } from '../content/teams';
-import { CLIPS, idlePose, LOWER, PoseBuf, UPPER } from './anim';
+import { CLIPS, DRIBBLE_RUN_BALL, idlePose, LOWER, PoseBuf, UPPER } from './anim';
 import { faceted, outlineMaterial, toonMaterial } from './toon';
 
 /** Grosor del contorno en metros (de referencia, antes de escalar por altura). */
@@ -305,6 +305,11 @@ export function createPlayerModel(look: PlayerLook, heightM: number, ringColor: 
   let runT = Math.random();
   let dribbleT = 0;
   let runW = 0;
+  /** Bote en carrera (bucle capturado): tiempo y peso (con balón y corriendo). */
+  let drT = 0;
+  let drW = 0;
+  const drSample = new PoseBuf();
+  const v3 = new THREE.Vector3();
   let ballW = 0;
   let shootT: number | null = null;
   let shootW = 0;
@@ -326,6 +331,10 @@ export function createPlayerModel(look: PlayerLook, heightM: number, ringColor: 
       ballW += ((s.hasBall ? 1 : 0) - ballW) * Math.min(1, dt * 10);
       runT += dt * THREE.MathUtils.clamp(s.speed / CLIPS.run.speed, 0.6, 1.5);
       dribbleT += dt * THREE.MathUtils.lerp(1.15, 1.7, runW); // el bote se acelera al correr
+      // Bote en carrera: al ritmo del jugador, como la carrera; manda cuando corre con el balón.
+      // (hasta ×1,8: la captura va a ~2,4 m/s y el jugador llega a ~4,7 m/s; más lento, los pies patinarían)
+      drT += dt * THREE.MathUtils.clamp(s.speed / CLIPS.dribbleRun.speed, 0.6, 1.8);
+      drW += ((s.hasBall ? runW : 0) - drW) * Math.min(1, dt * 10);
 
       // Tiro: la recogida se sincroniza con la barra; tras soltar, el clip sigue a su ritmo.
       const shoot = CLIPS.shoot;
@@ -348,6 +357,8 @@ export function createPlayerModel(look: PlayerLook, heightM: number, ringColor: 
         pose.blend(tmp, ballW, UPPER, false);
       }
       ballY = ballW > 0.5 ? tmp.ballY : -1;
+      // Corriendo con el balón: el bucle capturado (cuerpo entero) sustituye a carrera + bote.
+      if (drW > 0.01) pose.blend(CLIPS.dribbleRun.sample(drT, drSample), drW, undefined, true);
       if (shootW > 0.01) pose.blend(shoot.sample(lastShootT, tmp), shootW, undefined, true);
 
       // Gestos de jugada encima de todo lo anterior.
@@ -466,6 +477,24 @@ export function createPlayerModel(look: PlayerLook, heightM: number, ringColor: 
         out.addVectors(v1, v2).multiplyScalar(0.5);
         out.x += Math.sin(pivot.rotation.y) * 0.12 * scale;
         out.z += Math.cos(pivot.rotation.y) * 0.12 * scale;
+        return;
+      }
+      // Corriendo con el balón: la trayectoria capturada (espacio del cuerpo) y, en la mano, pegado a la palma.
+      if (drW > 0.5) {
+        const [hl, hr] = DRIBBLE_RUN_BALL.sample(drT, v3);
+        body.updateMatrixWorld(true);
+        pivot.localToWorld(out.copy(v3));
+        out.y = root.position.y + v3.y * scale; // altura sobre el suelo (sin el ajuste de pies del cuerpo)
+        const hold = Math.min(1, hl + hr);
+        if (hold > 0.001) {
+          armL.palm.getWorldPosition(v1);
+          armR.palm.getWorldPosition(v2);
+          const palm = v1.multiplyScalar(hl).addScaledVector(v2, hr).multiplyScalar(1 / (hl + hr));
+          const dir = v2.subVectors(out, palm);
+          if (dir.lengthSq() < 1e-6) dir.set(0, -1, 0);
+          out.lerp(dir.normalize().multiplyScalar(BALL_VISUAL_R).add(palm), hold);
+        }
+        out.y = Math.max(BALL_VISUAL_R, out.y);
         return;
       }
       // Botando: bajo la palma derecha, o en el aire según la curva horneada del mocap.

@@ -84,6 +84,7 @@ con `npx vercel link` dentro de esa carpeta (proyecto **pixel-hoops**, equipo **
   **N = pase / cortar pase**, **R = reset** (da el balón a un jugador).
 - **Tiro**: mantener y soltar con barra; la zona verde es estrecha con defensor encima y mucho más grande si
   estás solo (p. ej. tras un bloqueo). Triples, tablero, rebotes.
+- **Bote en carrera** con mocap capturado desde vídeo (`dribble-run.json`, bucle de la captura `bote-en-carrera`).
 - **Entradas y mates** al estar bajo el aro o atacándolo.
 - **Pase** al compañero más cercano a donde miras; el rival puede cortarlo pulsando pase si está cerca.
 - **Tras pasar**: el pasador corta al aro (pulsando pase otra vez se la devuelven) o va a bloquear al defensor.
